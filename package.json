@@ -1,0 +1,17 @@
+{
+    "name": "ubiqitum-kpi-api",
+    "version": "1.0.0",
+    "main": "netlify/functions/ubiqitum-kpi.ts",
+    "type": "module",
+    "scripts": {
+      "build": "echo 'No build step needed'"
+    },
+    "dependencies": {
+      "node-fetch": "^3.3.2"
+    },
+    "devDependencies": {
+      "@netlify/functions": "^1.4.0",
+      "typescript": "^5.2.2"
+    }
+  }
+  

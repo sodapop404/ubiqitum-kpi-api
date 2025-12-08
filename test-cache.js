@@ -4,7 +4,7 @@ const FUNCTION_URL = "[https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqi
 // Replace with your deployed Netlify function URL
 
 const payload = {
-brand_url: "[https://nike.com](https://nike.com)",       // <-- any real brand URL
+brand_url: "[https://nike.com](https://nike.com)",       // any real brand URL
 brand_name: "Nike",
 market: "Global",
 sector: "Sportswear",
@@ -22,6 +22,7 @@ let lastModified = null;
 
 for (let i = 1; i <= 2; i++) {
 console.log(`\n=== Request ${i} ===`);
+
 
 const res = await fetch(FUNCTION_URL, {
   method: "POST",
@@ -42,6 +43,7 @@ console.log("CACHE HIT:", cacheHit ? "✅ Yes" : "❌ No (fresh computation)");
 
 lastETag = etag;
 lastModified = lastMod;
+
 
 }
 }

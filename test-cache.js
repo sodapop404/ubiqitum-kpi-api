@@ -1,50 +1,49 @@
 import fetch from "node-fetch";
 
-const FUNCTION_URL = "https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqitum-cache";
+const FUNCTION_URL = "[https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqitum-cache](https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqitum-cache)";
+// Replace with your deployed Netlify function URL
 
 const payload = {
-  brand_url: "https://nike.com",       // <-- plain URL string
-  brand_name: "Nike",
-  market: "Global",
-  sector: "Sportswear",
-  segment: "B2C",
-  timeframe: "Current",
-  industry_definition: "Standard",
-  seed: 123,
-  consistency_window_days: 180,
-  stability_mode: "pinned"
+brand_url: "[https://nike.com](https://nike.com)",       // <-- any real brand URL
+brand_name: "Nike",
+market: "Global",
+sector: "Sportswear",
+segment: "B2C",
+timeframe: "Current",
+industry_definition: "Standard",
+seed: 123,
+consistency_window_days: 180,
+stability_mode: "pinned"
 };
 
 async function testCache() {
-  for (let i = 1; i <= 2; i++) {
-    console.log(`\n=== Request ${i} ===`);
-    try {
-      const res = await fetch(FUNCTION_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
+let lastETag = null;
+let lastModified = null;
 
-      if (!res.ok) {
-        console.error("HTTP error:", res.status, await res.text());
-        continue;
-      }
+for (let i = 1; i <= 2; i++) {
+console.log(`\n=== Request ${i} ===`);
 
-      const data = await res.json();
+const res = await fetch(FUNCTION_URL, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(payload)
+});
 
-      const lastModified = res.headers.get("Last-Modified");
-      const etag = res.headers.get("ETag");
+const data = await res.json();
+const etag = res.headers.get("ETag");
+const lastMod = res.headers.get("Last-Modified");
 
-      const isCacheHit = i === 2 && etag === lastModified ? true : false;
+const cacheHit = lastETag && lastETag === etag && lastModified === lastMod;
 
-      console.log("Response:", data);
-      console.log("ETag:", etag);
-      console.log("Last-Modified:", lastModified);
-      console.log("CACHE HIT:", isCacheHit ? "✅ Yes" : "❌ No (fresh computation)");
-    } catch (err) {
-      console.error("Fetch error:", err);
-    }
-  }
+console.log("Response:", data);
+console.log("ETag:", etag);
+console.log("Last-Modified:", lastMod);
+console.log("CACHE HIT:", cacheHit ? "✅ Yes" : "❌ No (fresh computation)");
+
+lastETag = etag;
+lastModified = lastMod;
+
+}
 }
 
-testCache();
+testCache().catch(console.error);

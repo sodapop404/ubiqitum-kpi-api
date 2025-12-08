@@ -1,13 +1,13 @@
 import fetch from "node-fetch";
 
-const FUNCTION_URL = "https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqitum-cache";
+const FUNCTION_URL = "[http://localhost:8888/.netlify/functions/ubiqitum-cache](http://localhost:8888/.netlify/functions/ubiqitum-cache)";
 // change this to your deployed Netlify URL when testing remotely
 
 const payload = {
-brand_url: "[https://example.com](https://example.com)",
-brand_name: "Example Brand",
+brand_url: "[https://nike.com](https://nike.com)",       // <-- replace with any real brand URL
+brand_name: "Nike",
 market: "Global",
-sector: "Tech",
+sector: "Sportswear",
 segment: "B2C",
 timeframe: "Current",
 industry_definition: "Standard",
@@ -17,27 +17,28 @@ stability_mode: "pinned"
 };
 
 async function testCache() {
-console.log("=== First request (should compute fresh) ===");
-let res = await fetch(FUNCTION_URL, {
+for (let i = 1; i <= 2; i++) {
+console.log(`\n=== Request ${i} ===`);
+const res = await fetch(FUNCTION_URL, {
 method: "POST",
 headers: { "Content-Type": "application/json" },
 body: JSON.stringify(payload)
 });
-let data = await res.json();
-console.log("Response:", data);
-console.log("ETag:", res.headers.get("ETag"));
-console.log("Last-Modified:", res.headers.get("Last-Modified"));
+const data = await res.json();
 
-console.log("\n=== Second request (should hit cache) ===");
-res = await fetch(FUNCTION_URL, {
-method: "POST",
-headers: { "Content-Type": "application/json" },
-body: JSON.stringify(payload)
-});
-data = await res.json();
+```
+const lastModified = res.headers.get("Last-Modified");
+const etag = res.headers.get("ETag");
+
+const isCacheHit = i === 2 && etag === lastModified ? true : false;
+
 console.log("Response:", data);
-console.log("ETag:", res.headers.get("ETag"));
-console.log("Last-Modified:", res.headers.get("Last-Modified"));
+console.log("ETag:", etag);
+console.log("Last-Modified:", lastModified);
+console.log("CACHE HIT:", isCacheHit ? "✅ Yes" : "❌ No (fresh computation)");
+```
+
+}
 }
 
 testCache().catch(console.error);

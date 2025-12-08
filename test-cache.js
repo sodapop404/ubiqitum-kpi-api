@@ -1,10 +1,10 @@
 import fetch from "node-fetch";
 
-const FUNCTION_URL = "[https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqitum-cache](https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqitum-cache)";
+const FUNCTION_URL = "https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqitum-cache";
 // Replace with your deployed Netlify function URL
 
 const payload = {
-brand_url: "[https://nike.com](https://nike.com)",       // any real brand URL
+brand_url: "https://nike.com",       // any real brand URL
 brand_name: "Nike",
 market: "Global",
 sector: "Sportswear",

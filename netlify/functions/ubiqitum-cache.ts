@@ -6,11 +6,14 @@ import crypto from "crypto";
 const redis = Redis.fromEnv(); // Make sure UPSTASH_REDIS_REST_URL and _TOKEN are set
 
 // Helper functions
-function canonicalDomain(url: string) {
-url = url.trim().toLowerCase().replace(/^https?:///, "");
-const host = url.split(/[/?#]/, 1)[0];
-return host.startsWith("[www](http://www).") ? host.slice(4) : host;
-}
+function canonicalDomain(url: string): string {
+    if (!url) return "";
+    const cleaned = url.trim().toLowerCase().replace(/^https?:\/\//, "");
+    const parts = cleaned.split(/[/\\?#]/); // split by /, \, ?, #
+    const host = parts[0] || "";
+    return host.startsWith("www.") ? host.slice(4) : host;
+  }
+  
 
 function sha256(input: string) {
 return crypto.createHash("sha256").update(input, "utf8").digest("hex");

@@ -1,6 +1,6 @@
 import fetch from "node-fetch";
 
-const FUNCTION_URL = "[http://localhost:8888/.netlify/functions/ubiqitum-cache](http://localhost:8888/.netlify/functions/ubiqitum-cache)";
+const FUNCTION_URL = "https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqitum-cache";
 // change this to your deployed Netlify URL when testing remotely
 
 const payload = {

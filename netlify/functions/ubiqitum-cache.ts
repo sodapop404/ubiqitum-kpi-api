@@ -1,5 +1,5 @@
 import { Handler } from "@netlify/functions";
-import Redis from "@upstash/redis";
+const { Redis } = require("@upstash/redis");
 import crypto from "crypto";
 
 // Initialize Upstash Redis

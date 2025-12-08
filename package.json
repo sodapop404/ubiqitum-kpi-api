@@ -4,14 +4,15 @@
     "main": "netlify/functions/ubiqitum-kpi.ts",
     "type": "module",
     "scripts": {
-      "build": "echo 'No build step needed'"
+    "build": "echo 'No build step needed'"
     },
     "dependencies": {
-      "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "@upstash/redis": "^2.0.0"
     },
     "devDependencies": {
-      "@netlify/functions": "^1.4.0",
-      "typescript": "^5.2.2"
+    "@netlify/functions": "^1.4.0",
+    "typescript": "^5.2.2"
     }
-  }
-  
+    }
+    

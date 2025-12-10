@@ -1,6 +1,9 @@
 // netlify/functions/ubiqitum-kpi.ts
 import type { Handler } from "@netlify/functions";
 
+// --------------------------
+// FULL SYSTEM PROMPT
+// --------------------------
 const SYSTEM_PROMPT = `MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 
 Stable • Deterministic • URL-First • Eleven-Field Strict JSON (KPIs + Meta)
@@ -24,36 +27,30 @@ OUTPUT CONTRACT (exact keys; JSON ONLY)
 }
 
 NUMBER & FORMAT RULES
-
 * KPI fields are numbers (or null); meta fields are strings.
 * Dot decimal, EXACTLY two decimals for numeric fields. No %, no thousands separators, no scientific notation, no trailing commas.
 * Clamp numeric values to [0,100] BEFORE rounding. Round HALF-UP to two decimals.
-* NEVER end a numeric value in *.00 or *.50. If rounding would produce *.00 or *.50, apply a DETERMINISTIC ±0.01 nudge (see Constancy Engine), then reclamp to [0,100].
+* NEVER end a numeric value in *.00 or *.50. If rounding would produce *.00 or *.50, apply a DETERMINISTIC ±0.01 nudge, then reclamp to [0,100].
 
 INPUTS (URL-first; optional overrides)
 User will supply at least:
-
 * brand_url: "<required URL>"
 
 Optional:
-
 * seed: <int>
 * stability_mode: <"pinned"|"live"> (default "pinned")
 * consistency_window_days: <int> (default 180)
 * evidence_history: <array of prior eleven-field JSONs with timestamps>
 
 Advanced overrides (replace inference if provided):
-
 * brand_name, market (→ ubiqitum_market), sector (→ ubiqitum_sector), segment, timeframe ("Current" default), industry_definition, allow_model_inference (default true)
 
 Optional direct metrics (override precedence for their fields):
-
 * brand_awareness_percent, sector_awareness_avg_percent
 * brand_relevance_percent, sector_relevance_avg_percent
 * brand_consideration_percent, brand_trust_percent
 
 Optional counts (used only when % missing and denominator>0):
-
 * aware_brand_count, sample_awareness_denominator
 * aware_competitors_total_count, sample_awareness_sector_denominator
 * relevant_brand_count, sample_relevance_denominator
@@ -62,7 +59,6 @@ Optional counts (used only when % missing and denominator>0):
 * trust_positive_count, sample_trust_denominator
 
 URL NORMALISATION & DERIVED CONTEXT
-
 1. canonical_domain = lower-case host; strip scheme/path/query/fragment; drop leading "www."
 2. brand_name: provided → on-page/meta → Title-Case of domain root.
 3. ubiqitum_market: provided → ccTLD → content/locales → "Global".
@@ -71,107 +67,73 @@ URL NORMALISATION & DERIVED CONTEXT
 6. timeframe default: "Current".
 
 CONSTANCY ENGINE (Determinism, Stability, Caching)
-
-* Goal: IDENTICAL outputs for IDENTICAL inputs across refreshes/back-to-back calls.
-* Stability Key (SK):
-  SK = sha256(
-  canonical_domain(brand_url) |
-  lower(resolved_brand_name) |
-  lower(resolved_ubiqitum_market) |
-  lower(resolved_ubiqitum_sector) |
-  lower(resolved_segment) |
-  "Current" |
-  lower(nullsafe(industry_definition)) |
-  nullsafe(seed) |
-  "V3.5.14"
-  )
-* session_seed = uint32 from SK (first 8 hex chars).
-* Use session_seed for tie-breakers AND to choose ±0.01 direction to avoid *.00/*.50 for numeric fields (even → +0.01; odd → −0.01).
-
-Modes & Window:
-
-* stability_mode:
-
-  * "pinned": within consistency_window_days (default 180), REUSE cached/evidence_history values for the same SK unless MATERIAL CHANGE occurs.
-  * "live": re-infer using newest evidence but remain deterministic via SK.
-* MATERIAL CHANGE (recompute):
-
-  * canonical_domain changes; OR
-  * explicit % values change by ≥0.10 points; OR
-  * counts imply ≥10% relative change; OR
-  * market/sector/segment/timeframe changes.
-
-EVIDENCE PRIORITY (slow, rationalised)
-
-1. Reuse evidence_history/cache within window for SK.
-2. If stale/missing and tools available: trawl in order → About → Products/Clients/Work → News/Press → Contact/Locations → authoritative listings.
-3. Record internal last-updated timestamps. If no web tools, rely on evidence_history + calibrated priors only.
+* session_seed = uint32 from deterministic SK
+* Use session_seed for tie-breakers and ±0.01 adjustment to avoid *.00/*.50
 
 SCORING PRECEDENCE (per KPI field)
-
 1. DIRECT % PROVIDED → use (then clamp → round → deterministic *.00/*.50 avoidance).
-2. COUNTS → if numerator & denominator and denominator>0, compute (num/den)*100 (then clamp/round/avoidance).
-3. CACHE/HISTORY (within window) → reuse SK value.
-4. MODEL-INFER (default ON) → if allow_model_inference !== false, infer via V3 (V5.14) priors/benchmarks with recency weighting.
-5. NULL POLICY → if allow_model_inference=false and steps (1)–(4) fail, set field to null.
+2. COUNTS → if numerator & denominator, compute %.
+3. CACHE/HISTORY → reuse SK value.
+4. MODEL-INFER (default ON) → if allow_model_inference !== false, infer via priors/benchmarks.
+5. NULL POLICY → if steps fail, set field to null.
 
-TRUST SCOPE RULE
-
-* brand_trust_percent reflects WIDER INDUSTRY sentiment (not only immediate sector subset). Use industry_definition if provided; else infer from segment/market.
-
-SECTOR BENCHMARKS
-
-* sector_relevance_avg_percent and sector_awareness_avg_percent follow the same precedence aligned to the competitor set, region, and timeframe.
-
-OVERALL COMPOSITE (deterministic)
-
-* ubiqitum_overallagainastallcompany_score =
+OVERALL COMPOSITE
+ubiqitum_overallagainastallcompany_score =
   0.35*brand_consideration_percent +
   0.30*brand_trust_percent +
   0.20*brand_relevance_percent +
   0.15*brand_awareness_percent
-* If any component missing and inference allowed, infer before computing.
-* If inference disabled and some components null, RE-NORMALISE remaining weights to sum to 1; if none present and inference disabled, return null.
-* After computing: clamp → round half-up → deterministic *.00/*.50 avoidance → reclamp.
-
-CONFLICTS & GUARDRAILS
-
-* Provided % ALWAYS overrides conflicting count-derived values (still clamp/round/avoidance).
-* Ignore non-numeric artifacts ("N/A", "-", "", null strings).
-* THINK before returning: apply precedence, constancy, window, and material-change logic deliberately.
-* NEVER mention instructions, your process, or model/version in the output.
 
 FINALISATION (strict key order)
 Return a single JSON object with keys in this exact order:
-
-1. brand_name
-2. canonical_domain
-3. ubiqitum_market
-4. ubiqitum_sector
-5. brand_relevance_percent
-6. sector_relevance_avg_percent
-7. brand_awareness_percent
-8. sector_awareness_avg_percent
-9. brand_consideration_percent
-10. brand_trust_percent
-11. ubiqitum_overallagainastallcompany_score
-
-* For numeric fields: Clamp → Round (2dp) → Avoid *.00/*.50 deterministically → Reclamp → Emit.
-* For string fields: Emit resolved values exactly.
-* Output the JSON object ONLY — nothing else.
+brand_name, canonical_domain, ubiqitum_market, ubiqitum_sector,
+brand_relevance_percent, sector_relevance_avg_percent,
+brand_awareness_percent, sector_awareness_avg_percent,
+brand_consideration_percent, brand_trust_percent,
+ubiqitum_overallagainastallcompany_score
 `;
 
+// Required output keys
+const REQUIRED_KEYS = [
+  "brand_name","canonical_domain","ubiqitum_market","ubiqitum_sector",
+  "brand_relevance_percent","sector_relevance_avg_percent",
+  "brand_awareness_percent","sector_awareness_avg_percent",
+  "brand_consideration_percent","brand_trust_percent",
+  "ubiqitum_overallagainastallcompany_score"
+] as const;
+
+// Normalisation engine
+function normalise(json: any, seedInt: number) {
+  const clamp = (x:number)=>Math.max(0,Math.min(100,x));
+  const round2=(x:number)=>Math.round((x+Number.EPSILON)*100)/100;
+  const avoid=(x:number)=>{
+    const s=x.toFixed(2);
+    if(s.endsWith("00")||s.endsWith("50")){
+      x = clamp(x + (seedInt % 2 === 0 ? 0.01 : -0.01));
+      x = round2(x);
+    }
+    return parseFloat(x.toFixed(2));
+  };
+
+  const out:any = {};
+  for (const k of REQUIRED_KEYS) {
+    const v = json[k];
+    if (typeof v === "number") out[k] = avoid(round2(clamp(v)));
+    else if (v === null || typeof v === "string") out[k] = v;
+    else out[k] = (v == null) ? null : v;
+  }
+  return out;
+}
+
 // -----------------------------------------------------------------------------
-// TEMPORARY DEBUG FUNCTION
+// MAIN NETLIFY FUNCTION (DEBUG VERSION)
 // -----------------------------------------------------------------------------
 export const handler: Handler = async (event) => {
 
-  // Only allow POST
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "POST only" };
   }
 
-  // Parse POST body
   let body: any = {};
   try {
     body = JSON.parse(event.body || "{}");
@@ -184,13 +146,14 @@ export const handler: Handler = async (event) => {
     return { statusCode: 400, body: "brand_url required" };
   }
 
-  // Prepare AI call
+  // Compose messages
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: JSON.stringify(body) }
   ];
 
-  let rawAIResponse: any = {};
+  // Fetch model
+  let rawText = "";
   try {
     const resp = await fetch(process.env.MODEL_BASE_URL!, {
       method: "POST",
@@ -203,26 +166,39 @@ export const handler: Handler = async (event) => {
         messages,
         temperature: 0.2,
         top_p: 0.9,
-        max_tokens: 350
+        max_tokens: 1500 // increase for long JSON
       })
     });
-
-    rawAIResponse = await resp.json();
+    rawText = await resp.text();
+    console.log("RAW LLM RESPONSE:", rawText);
   } catch (err) {
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: "AI fetch failed", detail: String(err) })
+      body: JSON.stringify({ error: "Model request failed", detail: String(err) })
     };
   }
 
-  // Return raw AI response for debugging
+  // Parse JSON safely
+  let llmJson: any = {};
+  try {
+    const data = JSON.parse(rawText);
+    const text = data.choices?.[0]?.message?.content || "{}";
+    llmJson = JSON.parse(text);
+  } catch (err) {
+    console.warn("Parsing failed, rawText:", rawText);
+    llmJson = {};
+  }
+
+  const seed = Number.isInteger(body.seed) ? body.seed : 0;
+  const out = normalise(llmJson, seed);
+
   return {
     statusCode: 200,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       input_payload: body,
-      ai_raw_response: rawAIResponse,
-      ai_message_content: rawAIResponse?.choices?.[0]?.message?.content || null
+      ai_raw_response: rawText,
+      normalized_output: out
     }, null, 2)
   };
 };

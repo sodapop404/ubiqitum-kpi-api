@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import type { Handler } from "@netlify/functions";
 
 // ====================================================================

@@ -161,6 +161,17 @@ Return a single JSON object with keys in this exact order:
 * Output the JSON object ONLY — nothing else.
 `;
 
+exports.handler = async (event, context) => {
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      OPENAI_KEY_PRESENT: !!process.env.OPENAI_API_KEY,
+      OPENAI_KEY_LENGTH: process.env.OPENAI_API_KEY?.length || 0,
+      OTHER_ENV_VAR: process.env.MY_OTHER_VAR || "not found"
+    })
+  };
+};
+
 const REQUIRED_KEYS = [
  "brand_name","canonical_domain","ubiqitum_market","ubiqitum_sector",
  "brand_relevance_percent","sector_relevance_avg_percent",

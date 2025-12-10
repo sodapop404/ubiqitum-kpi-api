@@ -63,7 +63,7 @@ Optional counts (used only when % missing and denominator>0):
 
 URL NORMALISATION & DERIVED CONTEXT
 
-1. canonical_domain = lower-case host; strip scheme/path/query/fragment; drop leading "[www](http://www)."
+1. canonical_domain = lower-case host; strip scheme/path/query/fragment; drop leading "www."
 2. brand_name: provided → on-page/meta → Title-Case of domain root.
 3. ubiqitum_market: provided → ccTLD → content/locales → "Global".
 4. ubiqitum_sector: provided → infer from About/Services/meta (concise, consumer-facing label).
@@ -160,9 +160,8 @@ Return a single JSON object with keys in this exact order:
 * For string fields: Emit resolved values exactly.
 * Output the JSON object ONLY — nothing else.
 `;
-`;
 
-// Required output keys (unchanged)
+// Required output keys
 const REQUIRED_KEYS = [
   "brand_name","canonical_domain","ubiqitum_market","ubiqitum_sector",
   "brand_relevance_percent","sector_relevance_avg_percent",
@@ -171,11 +170,11 @@ const REQUIRED_KEYS = [
   "ubiqitum_overallagainastallcompany_score"
 ] as const;
 
-// Normalisation engine (unchanged)
+// Normalisation engine
 function normalise(json: any, seedInt: number) {
   const clamp = (x:number)=>Math.max(0,Math.min(100,x));
   const round2=(x:number)=>Math.round((x+Number.EPSILON)*100)/100;
-  const avoid=(x:number)=>{ 
+  const avoid=(x:number)=>{
     const s=x.toFixed(2);
     if(s.endsWith("00")||s.endsWith("50")){
       x = clamp(x + (seedInt % 2 === 0 ? 0.01 : -0.01));
@@ -194,15 +193,12 @@ function normalise(json: any, seedInt: number) {
   return out;
 }
 
-//
 // -----------------------------------------------------------------------------
 // MAIN NETLIFY FUNCTION
 // -----------------------------------------------------------------------------
 export const handler: Handler = async (event) => {
 
-  // ----------------------------------------------------------
-  // DEBUG MODE: Allow GET ?test_env=1 to test environment vars
-  // ----------------------------------------------------------
+  // ENV TEST MODE
   if (event.httpMethod === "GET" && event.queryStringParameters?.test_env === "1") {
     return {
       statusCode: 200,
@@ -217,18 +213,16 @@ export const handler: Handler = async (event) => {
     };
   }
 
-  // Block anything that isn’t POST (except test_env above)
+  // Block non-POST
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "POST only" };
   }
 
-  // ---------------------------------------------
-  // Parse POST body
-  // ---------------------------------------------
+  // Parse POST
   let body: any = {};
   try {
     body = JSON.parse(event.body || "{}");
-  } catch (err) {
+  } catch {
     return { statusCode: 400, body: "Invalid JSON" };
   }
 
@@ -237,9 +231,7 @@ export const handler: Handler = async (event) => {
     return { statusCode: 400, body: "brand_url required" };
   }
 
-  // ---------------------------------------------
-  // Prepare AI call
-  // ---------------------------------------------
+  // AI request
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: JSON.stringify(body) }
@@ -272,10 +264,7 @@ export const handler: Handler = async (event) => {
     };
   }
 
-  // Deterministic seed
   const seed = Number.isInteger(body.seed) ? body.seed : 0;
-
-  // Normalise output to contract
   const out = normalise(llmJson, seed);
 
   return {
@@ -284,8 +273,3 @@ export const handler: Handler = async (event) => {
     body: JSON.stringify(out)
   };
 };
-
-
-
-
-

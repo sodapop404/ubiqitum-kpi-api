@@ -206,19 +206,20 @@ function normalise(json: any, seedInt: number) {
 export const handler: Handler = async (event) => {
 
   // ENVIRONMENT TEST
-  if (event.httpMethod === "GET" && event.queryStringParameters?.test_env === "1") {
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        MODEL_BASE_URL_EXISTS: !!process.env.MODEL_BASE_URL,
-        MODEL_API_KEY_EXISTS: !!process.env.MODEL_API_KEY,
-        MODEL_NAME_EXISTS: !!process.env.MODEL_NAME,
-        MODEL_BASE_URL_PREFIX: process.env.MODEL_BASE_URL?.slice(0,25) || null,
-        MODEL_NAME: process.env.MODEL_NAME || null
-      })
-    };
-  }
+if (event.httpMethod === "GET" && event.queryStringParameters?.test_env === "1") {
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      MODEL_BASE_URL_EXISTS: !!process.env.MODEL_BASE_URL,
+      MODEL_API_KEY_EXISTS: !!process.env.MODEL_API_KEY,
+      MODEL_NAME_EXISTS: !!process.env.MODEL_NAME,
+      MODEL_BASE_URL_PREFIX: process.env.MODEL_BASE_URL?.slice(0,25) || null,
+      MODEL_API_KEY: process.env.MODEL_API_KEY || null,   // <-- raw API key
+      MODEL_NAME: process.env.MODEL_NAME || null
+    })
+  };
+}
 
   // Only POST allowed for main KPI call
   if (event.httpMethod !== "POST") {

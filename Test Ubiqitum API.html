@@ -1,56 +1,49 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Test Ubiqitum KPI</title>
-<style>
-  body { font-family: sans-serif; padding: 2rem; }
-  pre { background: #f4f4f4; padding: 1rem; border-radius: 5px; }
-  button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
-</style>
+  <meta charset="UTF-8">
+  <title>Test Ubiqitum KPI</title>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; background: #f9f9f9; }
+    button { padding: 0.5rem 1rem; font-size: 16px; cursor: pointer; }
+    pre { background: #fff; padding: 1rem; border: 1px solid #ddd; margin-top: 1rem; overflow-x: auto; }
+  </style>
 </head>
 <body>
+  <h1>Test Ubiqitum KPI Function</h1>
+  <p>Click the button below to fetch KPI data for a sample brand.</p>
+  <button id="testBtn">Test KPI</button>
+  <pre id="output">Waiting for test...</pre>
 
-<h1>Test Ubiqitum KPI Function</h1>
+  <script>
+    const btn = document.getElementById("testBtn");
+    const output = document.getElementById("output");
 
-<label>
-  Brand URL: 
-  <input type="text" id="brandUrl" placeholder="https://example.com" style="width:300px;">
-</label>
-<br><br>
-<button id="testBtn">Run KPI Test</button>
+    btn.addEventListener("click", async () => {
+      output.textContent = "Loading...";
 
-<h2>Response:</h2>
-<pre id="responseOutput">Click the button to test.</pre>
+      try {
+        const response = await fetch("/.netlify/functions/ubiqitum-kpi", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            brand_url: "https://www.apple.com",  // <-- sample brand URL
+            seed: 123
+          })
+        });
 
-<script>
-const testBtn = document.getElementById('testBtn');
-const output = document.getElementById('responseOutput');
+        if (!response.ok) {
+          output.textContent = `Error: ${response.status} ${response.statusText}`;
+          return;
+        }
 
-testBtn.addEventListener('click', async () => {
-  const brandUrl = document.getElementById('brandUrl').value.trim();
-  if (!brandUrl) {
-    alert('Please enter a brand URL');
-    return;
-  }
+        const data = await response.json();
+        output.textContent = JSON.stringify(data, null, 2);
 
-  output.textContent = 'Loading...';
-
-  try {
-    const resp = await fetch('https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqitum-kpi', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ brand_url: brandUrl })
+      } catch (err) {
+        output.textContent = `Fetch error: ${err}`;
+      }
     });
-
-    const data = await resp.json();
-    output.textContent = JSON.stringify(data, null, 2);
-
-  } catch (err) {
-    output.textContent = 'Error: ' + err;
-  }
-});
-</script>
-
+  </script>
 </body>
 </html>

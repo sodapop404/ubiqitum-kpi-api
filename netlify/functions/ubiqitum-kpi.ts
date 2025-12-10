@@ -2,7 +2,7 @@
 import type { Handler } from "@netlify/functions";
 
 // -----------------------------------------------------------------------------
-// FULL SYSTEM PROMPT
+// SYSTEM PROMPT (FULL)
 // -----------------------------------------------------------------------------
 const SYSTEM_PROMPT = `MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 
@@ -165,7 +165,7 @@ Return a single JSON object with keys in this exact order:
 `;
 
 // -----------------------------------------------------------------------------
-// Required keys
+// REQUIRED KEYS
 // -----------------------------------------------------------------------------
 const REQUIRED_KEYS = [
   "brand_name","canonical_domain","ubiqitum_market","ubiqitum_sector",
@@ -176,7 +176,7 @@ const REQUIRED_KEYS = [
 ] as const;
 
 // -----------------------------------------------------------------------------
-// Normalisation engine
+// NORMALISATION
 // -----------------------------------------------------------------------------
 function normalise(json: any, seedInt: number) {
   const clamp = (x:number)=>Math.max(0,Math.min(100,x));
@@ -201,40 +201,26 @@ function normalise(json: any, seedInt: number) {
 }
 
 // -----------------------------------------------------------------------------
-// MAIN NETLIFY FUNCTION
+// MAIN HANDLER
 // -----------------------------------------------------------------------------
 export const handler: Handler = async (event) => {
-
-  // ENVIRONMENT TEST
-if (event.httpMethod === "GET" && event.queryStringParameters?.test_env === "1") {
-  return {
-    statusCode: 200,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      MODEL_BASE_URL_EXISTS: !!process.env.MODEL_BASE_URL,
-      MODEL_API_KEY_EXISTS: !!process.env.MODEL_API_KEY,
-      MODEL_NAME_EXISTS: !!process.env.MODEL_NAME,
-      MODEL_BASE_URL_PREFIX: process.env.MODEL_BASE_URL?.slice(0,25) || null,
-      MODEL_API_KEY: process.env.MODEL_API_KEY || null,   // <-- raw API key
-      MODEL_NAME: process.env.MODEL_NAME || null
-    })
-  };
-}
-
-  // Only POST allowed for main KPI call
+  // Only allow POST
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "POST only" };
   }
 
   // Parse POST body
   let body: any = {};
-  try { body = JSON.parse(event.body || "{}"); }
-  catch { return { statusCode: 400, body: "Invalid JSON" }; }
+  try {
+    body = JSON.parse(event.body || "{}");
+  } catch {
+    return { statusCode: 400, body: "Invalid JSON" };
+  }
 
   const { brand_url } = body;
   if (!brand_url) return { statusCode: 400, body: "brand_url required" };
 
-  // AI request
+  // Prepare AI request
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: JSON.stringify(body) }
@@ -261,7 +247,10 @@ if (event.httpMethod === "GET" && event.queryStringParameters?.test_env === "1")
     const text = data.choices?.[0]?.message?.content || "{}";
     llmJson = JSON.parse(text);
   } catch (err) {
-    return { statusCode: 500, body: JSON.stringify({ error: "Model response parsing failed", detail: String(err) }) };
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: "Model response parsing failed", detail: String(err) })
+    };
   }
 
   const seed = Number.isInteger(body.seed) ? body.seed : 0;

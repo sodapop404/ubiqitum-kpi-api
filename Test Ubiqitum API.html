@@ -5,9 +5,8 @@
 <title>Test Ubiqitum KPI</title>
 <style>
   body { font-family: sans-serif; padding: 2rem; }
-  pre { background: #f4f4f4; padding: 1rem; border-radius: 5px; white-space: pre-wrap; word-break: break-word;}
+  pre { background: #f4f4f4; padding: 1rem; border-radius: 5px; }
   button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
-  input { padding: 0.3rem; font-size: 1rem; }
 </style>
 </head>
 <body>
@@ -38,21 +37,11 @@ testBtn.addEventListener('click', async () => {
   output.textContent = 'Loading...';
 
   try {
-    // Fetch the HTML of the brand page
-    const html = await fetch(brandUrl).then(r => r.text());
-
-    // Call your Netlify KPI function
     const resp = await fetch('https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqitum-kpi', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: brandUrl, html })
+      body: JSON.stringify({ brand_url: brandUrl })
     });
-
-    if (!resp.ok) {
-      const text = await resp.text();
-      output.textContent = `Error ${resp.status}: ${text}`;
-      return;
-    }
 
     const data = await resp.json();
     output.textContent = JSON.stringify(data, null, 2);

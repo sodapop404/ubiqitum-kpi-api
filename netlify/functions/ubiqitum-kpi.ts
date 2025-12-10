@@ -12,6 +12,11 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
+console.log("MODEL_BASE_URL =", process.env.MODEL_BASE_URL);
+console.log("MODEL_API_KEY =", process.env.MODEL_API_KEY ? "[OK]" : "[MISSING]");
+console.log("MODEL_NAME =", process.env.MODEL_NAME);
+
+
 // --------------------------
 // FULL SYSTEM PROMPT (UNCHANGED)
 // --------------------------

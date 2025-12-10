@@ -89,10 +89,10 @@ SCORING PRECEDENCE (per KPI field)
 
 OVERALL COMPOSITE
 ubiqitum_overallagainastallcompany_score =
-  0.35*brand_consideration_percent +
-  0.30*brand_trust_percent +
-  0.20*brand_relevance_percent +
-  0.15*brand_awareness_percent
+  0.35*brand_consideration_percent +
+  0.30*brand_trust_percent +
+  0.20*brand_relevance_percent +
+  0.15*brand_awareness_percent
 
 FINALISATION (strict key order)
 Return a single JSON object with keys in this exact order:
@@ -114,7 +114,6 @@ const REQUIRED_KEYS = [
 
 // Deterministic normalization (UNCHANGED)
 function normalise(json: any, seedInt: number) {
-  // 
   const clamp = (x:number)=>Math.max(0,Math.min(100,x));
   const round2=(x:number)=>Math.round((x+Number.EPSILON)*100)/100;
   const avoid=(x:number)=>{
@@ -129,10 +128,8 @@ function normalise(json: any, seedInt: number) {
   const out:any = {};
   for (const k of REQUIRED_KEYS) {
     const v = json[k];
-    // This is the core logic implementing the "NUMBER & FORMAT RULES"
     if (typeof v === "number") out[k] = avoid(round2(clamp(v)));
     else if (v === null || typeof v === "string") out[k] = v;
-    // Handle cases where the key might be missing or an unexpected type, setting it to null if undefined/invalid
     else out[k] = (v == null) ? null : v;
   }
   return out;
@@ -157,7 +154,7 @@ export const handler: Handler = async (event) => {
     return { 
       statusCode: 405, 
       headers: CORS_HEADERS, // Ensure CORS headers are present even on error
-      body: JSON.stringify({ error: "Method Not Allowed. POST only" }) 
+      body: "POST only" 
     };
   }
 
@@ -177,11 +174,11 @@ export const handler: Handler = async (event) => {
     return { 
       statusCode: 400, 
       headers: CORS_HEADERS,
-      body: JSON.stringify({ error: "brand_url required in request body" }) 
+      body: JSON.stringify({ error: "brand_url required" }) 
     };
   }
 
-  // Compose messages for the LLM
+  // Compose messages
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: JSON.stringify(body) }
@@ -209,18 +206,16 @@ export const handler: Handler = async (event) => {
     if (!resp.ok) {
         rawText = await resp.text();
         console.error("LLM API Status Error:", resp.status, rawText);
-        // CRITICAL REVISION: Do not send 'rawText' back to the client on a 500 error.
         throw new Error(`LLM API failed with status ${resp.status}`);
     }
     
     rawText = await resp.text();
     console.log("RAW LLM RESPONSE:", rawText);
   } catch (err) {
-    // This is the error handler for the LLM request itself (network, auth, 5xx from LLM API)
     return {
       statusCode: 500,
       headers: CORS_HEADERS,
-      body: JSON.stringify({ error: "Model request failed", detail: String(err) })
+      body: JSON.stringify({ error: "Model request failed", detail: String(err), raw_llm_response: rawText })
     };
   }
 
@@ -246,12 +241,11 @@ export const handler: Handler = async (event) => {
       llmJson = JSON.parse(jsonString);
       
   } catch (err) {
-    // This is the error handler if the LLM response cannot be parsed into the final JSON contract
     console.warn("Final LLM JSON Parsing failed:", err);
     return {
       statusCode: 502, // Bad Gateway/Parsing Error
       headers: CORS_HEADERS,
-      body: JSON.stringify({ error: "Could not parse final JSON from model output", detail: String(err) })
+      body: JSON.stringify({ error: "Could not parse final JSON from model output", detail: String(err), raw_llm_response: rawText })
     };
   }
 
@@ -259,13 +253,16 @@ export const handler: Handler = async (event) => {
   const out = normalise(llmJson, seed);
 
   // 3. Final success response
-  // CRITICAL REVISION: Return the 'out' object directly to satisfy the strict KPI contract.
   return {
     statusCode: 200,
     headers: { 
       "Content-Type": "application/json",
       ...CORS_HEADERS // Include CORS headers here
     },
-    body: JSON.stringify(out, null, 2) // Return the normalized KPI object directly
+    body: JSON.stringify({
+      input_payload: body,
+      // ai_raw_response: rawText, // Optional: You can remove this to reduce payload size
+      normalized_output: out
+    }, null, 2)
   };
 };

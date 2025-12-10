@@ -1,9 +1,6 @@
 // netlify/functions/ubiqitum-kpi.ts
 import type { Handler } from "@netlify/functions";
 
-// -----------------------------------------------------------------------------
-// SYSTEM PROMPT (FULL)
-// -----------------------------------------------------------------------------
 const SYSTEM_PROMPT = `MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 
 Stable • Deterministic • URL-First • Eleven-Field Strict JSON (KPIs + Meta)
@@ -165,45 +162,10 @@ Return a single JSON object with keys in this exact order:
 `;
 
 // -----------------------------------------------------------------------------
-// REQUIRED KEYS
-// -----------------------------------------------------------------------------
-const REQUIRED_KEYS = [
-  "brand_name","canonical_domain","ubiqitum_market","ubiqitum_sector",
-  "brand_relevance_percent","sector_relevance_avg_percent",
-  "brand_awareness_percent","sector_awareness_avg_percent",
-  "brand_consideration_percent","brand_trust_percent",
-  "ubiqitum_overallagainastallcompany_score"
-] as const;
-
-// -----------------------------------------------------------------------------
-// NORMALISATION
-// -----------------------------------------------------------------------------
-function normalise(json: any, seedInt: number) {
-  const clamp = (x:number)=>Math.max(0,Math.min(100,x));
-  const round2=(x:number)=>Math.round((x+Number.EPSILON)*100)/100;
-  const avoid=(x:number)=>{
-    const s=x.toFixed(2);
-    if(s.endsWith("00")||s.endsWith("50")){
-      x = clamp(x + (seedInt % 2 === 0 ? 0.01 : -0.01));
-      x = round2(x);
-    }
-    return parseFloat(x.toFixed(2));
-  };
-
-  const out:any = {};
-  for (const k of REQUIRED_KEYS) {
-    const v = json[k];
-    if (typeof v === "number") out[k] = avoid(round2(clamp(v)));
-    else if (v === null || typeof v === "string") out[k] = v;
-    else out[k] = (v == null) ? null : v;
-  }
-  return out;
-}
-
-// -----------------------------------------------------------------------------
-// MAIN HANDLER
+// TEMPORARY DEBUG FUNCTION
 // -----------------------------------------------------------------------------
 export const handler: Handler = async (event) => {
+
   // Only allow POST
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "POST only" };
@@ -218,47 +180,49 @@ export const handler: Handler = async (event) => {
   }
 
   const { brand_url } = body;
-  if (!brand_url) return { statusCode: 400, body: "brand_url required" };
+  if (!brand_url) {
+    return { statusCode: 400, body: "brand_url required" };
+  }
 
-  // Prepare AI request
+  // Prepare AI call
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: JSON.stringify(body) }
   ];
 
-  const resp = await fetch(process.env.MODEL_BASE_URL!, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.MODEL_API_KEY}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: process.env.MODEL_NAME || "gpt-oss-20b",
-      messages,
-      temperature: 0.2,
-      top_p: 0.9,
-      max_tokens: 350
-    })
-  });
-
-  let llmJson: any;
+  let rawAIResponse: any = {};
   try {
-    const data = await resp.json();
-    const text = data.choices?.[0]?.message?.content || "{}";
-    llmJson = JSON.parse(text);
+    const resp = await fetch(process.env.MODEL_BASE_URL!, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.MODEL_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: process.env.MODEL_NAME || "gpt-oss-20b",
+        messages,
+        temperature: 0.2,
+        top_p: 0.9,
+        max_tokens: 350
+      })
+    });
+
+    rawAIResponse = await resp.json();
   } catch (err) {
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: "Model response parsing failed", detail: String(err) })
+      body: JSON.stringify({ error: "AI fetch failed", detail: String(err) })
     };
   }
 
-  const seed = Number.isInteger(body.seed) ? body.seed : 0;
-  const out = normalise(llmJson, seed);
-
+  // Return raw AI response for debugging
   return {
     statusCode: 200,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(out)
+    body: JSON.stringify({
+      input_payload: body,
+      ai_raw_response: rawAIResponse,
+      ai_message_content: rawAIResponse?.choices?.[0]?.message?.content || null
+    }, null, 2)
   };
 };

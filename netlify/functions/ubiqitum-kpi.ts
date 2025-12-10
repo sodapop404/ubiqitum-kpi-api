@@ -1,92 +1,9 @@
 // netlify/functions/ubiqitum-kpi.ts
 import type { Handler } from "@netlify/functions";
 
-export const handler: Handler = async (event) => {
-
-  // ----------------------------------------------------------
-  // ENVIRONMENT TEST MODE
-  // GET /?test_env=1 will return a snapshot of your env vars
-  // ----------------------------------------------------------
-  if (event.httpMethod === "GET" && event.queryStringParameters?.test_env === "1") {
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        MODEL_BASE_URL_EXISTS: !!process.env.MODEL_BASE_URL,
-        MODEL_API_KEY_EXISTS: !!process.env.MODEL_API_KEY,
-        MODEL_NAME_EXISTS: !!process.env.MODEL_NAME,
-        MODEL_BASE_URL: process.env.MODEL_BASE_URL || null,
-        MODEL_NAME: process.env.MODEL_NAME || null
-      })
-    };
-  }
-
-  // Block non-POST
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: "POST only" };
-  }
-
-  // ---------------------------------------------
-  // Parse POST body
-  // ---------------------------------------------
-  let body: any = {};
-  try {
-    body = JSON.parse(event.body || "{}");
-  } catch {
-    return { statusCode: 400, body: "Invalid JSON" };
-  }
-
-  const { brand_url } = body;
-  if (!brand_url) {
-    return { statusCode: 400, body: "brand_url required" };
-  }
-
-  // ---------------------------------------------
-  // AI call (unchanged)
-  // ---------------------------------------------
-  const messages = [
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: JSON.stringify(body) }
-  ];
-
-  const resp = await fetch(process.env.MODEL_BASE_URL!, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.MODEL_API_KEY}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: process.env.MODEL_NAME || "gpt-oss-20b",
-      messages,
-      temperature: 0.2,
-      top_p: 0.9,
-      max_tokens: 350
-    })
-  });
-
-  let llmJson: any;
-  try {
-    const data = await resp.json();
-    const text = data.choices?.[0]?.message?.content || "{}";
-    llmJson = JSON.parse(text);
-  } catch (err) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: "Model response parsing failed", detail: String(err) })
-    };
-  }
-
-  const seed = Number.isInteger(body.seed) ? body.seed : 0;
-  const out = normalise(llmJson, seed);
-
-  return {
-    statusCode: 200,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(out)
-  };
-};
-
-
+// -----------------------------------------------------------------------------
+// FULL SYSTEM PROMPT
+// -----------------------------------------------------------------------------
 const SYSTEM_PROMPT = `MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 
 Stable • Deterministic • URL-First • Eleven-Field Strict JSON (KPIs + Meta)
@@ -247,7 +164,9 @@ Return a single JSON object with keys in this exact order:
 * Output the JSON object ONLY — nothing else.
 `;
 
-// Required output keys
+// -----------------------------------------------------------------------------
+// Required keys
+// -----------------------------------------------------------------------------
 const REQUIRED_KEYS = [
   "brand_name","canonical_domain","ubiqitum_market","ubiqitum_sector",
   "brand_relevance_percent","sector_relevance_avg_percent",
@@ -256,7 +175,9 @@ const REQUIRED_KEYS = [
   "ubiqitum_overallagainastallcompany_score"
 ] as const;
 
+// -----------------------------------------------------------------------------
 // Normalisation engine
+// -----------------------------------------------------------------------------
 function normalise(json: any, seedInt: number) {
   const clamp = (x:number)=>Math.max(0,Math.min(100,x));
   const round2=(x:number)=>Math.round((x+Number.EPSILON)*100)/100;
@@ -284,7 +205,7 @@ function normalise(json: any, seedInt: number) {
 // -----------------------------------------------------------------------------
 export const handler: Handler = async (event) => {
 
-  // ENV TEST MODE
+  // ENVIRONMENT TEST
   if (event.httpMethod === "GET" && event.queryStringParameters?.test_env === "1") {
     return {
       statusCode: 200,
@@ -293,29 +214,24 @@ export const handler: Handler = async (event) => {
         MODEL_BASE_URL_EXISTS: !!process.env.MODEL_BASE_URL,
         MODEL_API_KEY_EXISTS: !!process.env.MODEL_API_KEY,
         MODEL_NAME_EXISTS: !!process.env.MODEL_NAME,
-        MODEL_BASE_URL_PREFIX: process.env.MODEL_BASE_URL?.slice(0, 25) || null,
+        MODEL_BASE_URL_PREFIX: process.env.MODEL_BASE_URL?.slice(0,25) || null,
         MODEL_NAME: process.env.MODEL_NAME || null
       })
     };
   }
 
-  // Block non-POST
+  // Only POST allowed for main KPI call
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "POST only" };
   }
 
-  // Parse POST
+  // Parse POST body
   let body: any = {};
-  try {
-    body = JSON.parse(event.body || "{}");
-  } catch {
-    return { statusCode: 400, body: "Invalid JSON" };
-  }
+  try { body = JSON.parse(event.body || "{}"); }
+  catch { return { statusCode: 400, body: "Invalid JSON" }; }
 
   const { brand_url } = body;
-  if (!brand_url) {
-    return { statusCode: 400, body: "brand_url required" };
-  }
+  if (!brand_url) return { statusCode: 400, body: "brand_url required" };
 
   // AI request
   const messages = [
@@ -344,10 +260,7 @@ export const handler: Handler = async (event) => {
     const text = data.choices?.[0]?.message?.content || "{}";
     llmJson = JSON.parse(text);
   } catch (err) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: "Model response parsing failed", detail: String(err) })
-    };
+    return { statusCode: 500, body: JSON.stringify({ error: "Model response parsing failed", detail: String(err) }) };
   }
 
   const seed = Number.isInteger(body.seed) ? body.seed : 0;

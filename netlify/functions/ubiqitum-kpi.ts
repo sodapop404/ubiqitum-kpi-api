@@ -102,7 +102,7 @@ const REQUIRED_KEYS = [
   "ubiqitum_overallagainastallcompany_score"
 ] as const;
 
-// Normalisation engine
+// Deterministic normalization
 function normalise(json: any, seedInt: number) {
   const clamp = (x:number)=>Math.max(0,Math.min(100,x));
   const round2=(x:number)=>Math.round((x+Number.EPSILON)*100)/100;
@@ -126,7 +126,7 @@ function normalise(json: any, seedInt: number) {
 }
 
 // -----------------------------------------------------------------------------
-// MAIN NETLIFY FUNCTION (DEBUG VERSION)
+// MAIN NETLIFY FUNCTION
 // -----------------------------------------------------------------------------
 export const handler: Handler = async (event) => {
 
@@ -166,7 +166,7 @@ export const handler: Handler = async (event) => {
         messages,
         temperature: 0.2,
         top_p: 0.9,
-        max_tokens: 1500 // increase for long JSON
+        max_tokens: 2000 // long JSON output
       })
     });
     rawText = await resp.text();
@@ -178,7 +178,7 @@ export const handler: Handler = async (event) => {
     };
   }
 
-  // Parse JSON safely
+  // Safe JSON extraction
   let llmJson: any = {};
   try {
     const data = JSON.parse(rawText);

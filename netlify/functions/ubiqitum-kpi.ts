@@ -161,16 +161,21 @@ Return a single JSON object with keys in this exact order:
 * Output the JSON object ONLY — nothing else.
 `;
 
-exports.handler = async (event, context) => {
+// TEMP: Environment variable test mode
+if (event.httpMethod === "GET" && event.queryStringParameters?.test_env === "1") {
   return {
     statusCode: 200,
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      OPENAI_KEY_PRESENT: !!process.env.OPENAI_API_KEY,
-      OPENAI_KEY_LENGTH: process.env.OPENAI_API_KEY?.length || 0,
-      OTHER_ENV_VAR: process.env.MY_OTHER_VAR || "not found"
+      MODEL_BASE_URL_EXISTS: !!process.env.MODEL_BASE_URL,
+      MODEL_NAME_EXISTS: !!process.env.MODEL_NAME,
+      MODEL_API_KEY_EXISTS: !!process.env.MODEL_API_KEY,
+      MODEL_BASE_URL_PREFIX: process.env.MODEL_BASE_URL?.slice(0, 20) || null,
+      MODEL_NAME: process.env.MODEL_NAME || null
     })
   };
-};
+}
+
 
 const REQUIRED_KEYS = [
  "brand_name","canonical_domain","ubiqitum_market","ubiqitum_sector",

@@ -1,3 +1,4 @@
+// netlify/functions/ubiqitum-kpi.ts
 import type { Handler } from "@netlify/functions";
 
 const SYSTEM_PROMPT = `MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
@@ -161,83 +162,66 @@ Return a single JSON object with keys in this exact order:
 `;
 
 const REQUIRED_KEYS = [
-"brand_name",
-"canonical_domain",
-"ubiqitum_market",
-"ubiqitum_sector",
-"brand_relevance_percent",
-"sector_relevance_avg_percent",
-"brand_awareness_percent",
-"sector_awareness_avg_percent",
-"brand_consideration_percent",
-"brand_trust_percent",
-"ubiqitum_overallagainastallcompany_score"
+ "brand_name","canonical_domain","ubiqitum_market","ubiqitum_sector",
+ "brand_relevance_percent","sector_relevance_avg_percent",
+ "brand_awareness_percent","sector_awareness_avg_percent",
+ "brand_consideration_percent","brand_trust_percent",
+ "ubiqitum_overallagainastallcompany_score"
 ] as const;
 
 function normalise(json: any, seedInt: number) {
-const clamp = (x: number) => Math.max(0, Math.min(100, x));
-const round2 = (x: number) => Math.round((x + Number.EPSILON) * 100) / 100;
-const avoid = (x: number) => {
-let y = x;
-const s = y.toFixed(2);
-if (s.endsWith("00") || s.endsWith("50")) {
-y = clamp(y + (seedInt % 2 === 0 ? 0.01 : -0.01));
-y = round2(y);
-}
-return parseFloat(y.toFixed(2));
-};
-
-const out: any = {};
-for (const k of REQUIRED_KEYS) {
-const v = json[k];
-if (typeof v === "number") out[k] = avoid(round2(clamp(v)));
-else if (v === null || typeof v === "string") out[k] = v;
-else out[k] = v == null ? null : v;
-}
-return out;
+  const clamp = (x:number)=>Math.max(0,Math.min(100,x));
+  const round2=(x:number)=>Math.round((x+Number.EPSILON)*100)/100;
+  const avoid=(x:number)=>{ const s=x.toFixed(2); if(s.endsWith("00")||s.endsWith("50")){ x=clamp(x + (seedInt%2===0?0.01:-0.01)); x=round2(x);} return parseFloat(x.toFixed(2)); };
+  const out:any = {};
+  for (const k of REQUIRED_KEYS) {
+    const v = json[k];
+    if (typeof v === "number") out[k] = avoid(round2(clamp(v)));
+    else if (v === null || typeof v === "string") out[k] = v;
+    else out[k] = (v==null)?null:v; // leave strings for meta
+  }
+  return out;
 }
 
 export const handler: Handler = async (event) => {
-if (event.httpMethod !== "POST") return { statusCode: 405, body: "POST only" };
+  if (event.httpMethod !== "POST") return { statusCode: 405, body: "POST only" };
+  const body = JSON.parse(event.body || "{}");
+  const { brand_url } = body;
+  if (!brand_url) return { statusCode: 400, body: "brand_url required" };
 
-const body = JSON.parse(event.body || "{}");
-const { brand_url } = body;
-if (!brand_url) return { statusCode: 400, body: "brand_url required" };
+  // build your model call (OpenAI-compatible or OSS gateway)
+  const messages = [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: JSON.stringify(body) }
+  ];
 
-// Build messages for OpenAI-compatible model
-const messages = [
-{ role: "system", content: SYSTEM_PROMPT },
-{ role: "user", content: JSON.stringify(body) }
-];
+  // Example OpenAI-compatible call (adjust base URL & key)
+  const resp = await fetch(process.env.MODEL_BASE_URL!, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.MODEL_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: process.env.MODEL_NAME || "gpt-oss-20b",
+      messages,
+      temperature: 0.2,
+      top_p: 0.9,
+      max_tokens: 350
+    })
+  });
 
-// Example OpenAI-compatible fetch call (replace with your actual base URL & key)
-const resp = await fetch(process.env.MODEL_BASE_URL!, {
-method: "POST",
-headers: {
-"Authorization": `Bearer ${process.env.MODEL_API_KEY}`,
-"Content-Type": "application/json"
-},
-body: JSON.stringify({
-model: process.env.MODEL_NAME || "gpt-oss-20b",
-messages,
-temperature: 0.2,
-top_p: 0.9,
-max_tokens: 350
-})
-});
+  const data = await resp.json();
+  const text = data.choices?.[0]?.message?.content || "{}";
+  const json = JSON.parse(text);
 
-const data = await resp.json();
-const text = data.choices?.[0]?.message?.content || "{}";
-const json = JSON.parse(text);
+  // derive seed deterministically if not in body
+  const seed = Number.isInteger(body.seed) ? body.seed : 0;
+  const out = normalise(json, seed);
 
-// Determine seed
-const seed = Number.isInteger(body.seed) ? body.seed : 0;
-
-const out = normalise(json, seed);
-
-return {
-statusCode: 200,
-headers: { "Content-Type": "application/json" },
-body: JSON.stringify(out)
-};
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(out)
+  };
 };

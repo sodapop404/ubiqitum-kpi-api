@@ -6,6 +6,8 @@ import crypto from "crypto";
 import { Redis } from "@upstash/redis";
 import { handler as kpiHandler } from "./ubiqitum-kpi"; // CRITICAL: Direct Import
 
+throw new Error("🔥 FUNCTION EXECUTED 🔥");
+
 const redis = Redis.fromEnv(); // UPSTASH_REDIS_REST_URL / _TOKEN
 
 // --- Helper functions (copy/paste from your guide) ---

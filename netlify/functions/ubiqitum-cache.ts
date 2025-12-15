@@ -1,103 +1,71 @@
-import { Handler } from "@netlify/functions";
-import { Redis } from "@upstash/redis";
+// netlify/functions/ubiqitum-cache.ts
+import type { Handler } from "@netlify/functions";
 import crypto from "crypto";
+import { Redis } from "@upstash/redis";
 
-// Initialize Upstash Redis
-const redis = Redis.fromEnv(); // Make sure UPSTASH_REDIS_REST_URL and _TOKEN are set
+const redis = Redis.fromEnv(); // UPSTASH_REDIS_REST_URL / _TOKEN
 
-// Helper functions
-function canonicalDomain(url: string): string {
-    if (!url) return "";
-    const cleaned = url.trim().toLowerCase().replace(/^https?:\/\//, "");
-    const parts = cleaned.split(/[/\\?#]/); // split by /, \, ?, #
-    const host = parts[0] || "";
-    return host.startsWith("www.") ? host.slice(4) : host;
-  }
-  
+function canonicalDomain(u:string){ u=u.trim().toLowerCase().replace(/^https?:\/\//,''); const h=u.split(/[\/?#]/,1)[0]; return h.startsWith('www.')?h.slice(4):h; }
+function sha256(s:string){ return crypto.createHash('sha256').update(s,'utf8').digest('hex'); }
 
-function sha256(input: string) {
-return crypto.createHash("sha256").update(input, "utf8").digest("hex");
+function buildSK(args:{brand_url:string,brand_name?:string,market?:string,sector?:string,segment?:string,timeframe?:string,industry_definition?:string,seed?:number}){
+  const canon = canonicalDomain(args.brand_url);
+  const parts = [
+    canon,
+    (args.brand_name||"").toLowerCase(),
+    (args.market||"Global").toLowerCase(),
+    (args.sector||"").toLowerCase(),
+    (args.segment||"B2C").toLowerCase(),
+    (args.timeframe||"Current").toLowerCase(),
+    (args.industry_definition||"").toLowerCase(),
+    args.seed==null? "": String(args.seed),
+    "V3.5.14"
+  ];
+  return sha256(parts.join('|'));
 }
 
-// Build Stability Key
-function buildStabilityKey(params: Record<string, any>) {
-const parts = [
-canonicalDomain(params.brand_url || ""),
-(params.brand_name || "").toLowerCase(),
-(params.market || "Global").toLowerCase(),
-(params.sector || "").toLowerCase(),
-(params.segment || "B2C").toLowerCase(),
-(params.timeframe || "Current").toLowerCase(),
-(params.industry_definition || "").toLowerCase(),
-params.seed != null ? String(params.seed) : "",
-"V3.5.14"
-];
-return sha256(parts.join("|"));
-}
-
-// Main handler
 export const handler: Handler = async (event) => {
-if (event.httpMethod !== "POST") return { statusCode: 405, body: "POST only" };
+  if (event.httpMethod !== "POST") return { statusCode: 405, body: "POST only" };
+  const body = JSON.parse(event.body || "{}");
+  const { brand_url } = body;
+  if (!brand_url) return { statusCode: 400, body: "brand_url required" };
 
-let body;
-try {
-body = JSON.parse(event.body || "{}");
-} catch {
-return { statusCode: 400, body: "Invalid JSON" };
-}
+  const sk = buildSK(body);
+  const windowDays = Number(body.consistency_window_days ?? 180);
+  const mode = body.stability_mode || "pinned";
 
-const { brand_url } = body;
-if (!brand_url) return { statusCode: 400, body: "brand_url required" };
+  // try cache
+  const key = `ubiqitum:sk:${sk}`;
+  const cached = await redis.get<{payload:any, meta:any}>(key);
 
-const sk = buildStabilityKey(body);
-const windowDays = Number(body.consistency_window_days || 180);
-const mode = body.stability_mode || "pinned";
+  const nowIso = new Date().toISOString();
+  if (cached && mode === "pinned") {
+    const last = new Date(cached.meta.last_refreshed_at || nowIso);
+    const fresh = (Date.now() - last.getTime()) / 86400000 <= (cached.meta.consistency_window_days ?? windowDays);
+    if (fresh) {
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "application/json", "ETag": sk, "Last-Modified": cached.meta.last_refreshed_at },
+        body: JSON.stringify(cached.payload)
+      };
+    }
+  }
 
-const key = `ubiqitum:sk:${sk}`;
-const nowIso = new Date().toISOString();
+  // recompute via main endpoint
+  const res = await fetch('/.netlify/functions/ubiqitum-kpi', { // same site call
+    method: "POST", headers: { "Content-Type":"application/json" }, body: JSON.stringify(body)
+  });
+  const payload = await res.json();
 
-// --- Try cache ---
-try {
-const cached = await redis.get<{ payload: any; meta: any }>(key);
-if (cached && mode === "pinned") {
-const last = new Date(cached.meta.last_refreshed_at || nowIso);
-const ageDays = (Date.now() - last.getTime()) / 86400000;
-if (ageDays <= (cached.meta.consistency_window_days || windowDays)) {
-// Cache hit
-return {
-statusCode: 200,
-headers: { "Content-Type": "application/json", "ETag": sk, "Last-Modified": cached.meta.last_refreshed_at },
-body: JSON.stringify(cached.payload)
-};
-}
-}
-} catch (err) {
-console.error("Redis GET failed:", err);
-}
+  // set cache
+  await redis.set(key, {
+    payload,
+    meta: { sk, model_version:"V3.5.14", last_refreshed_at: nowIso, consistency_window_days: windowDays }
+  });
 
-// --- Compute KPI ---
-let payload;
-try {
-const { computeKpi } = await import("./ubiqitum-kpi-core");
-payload = await computeKpi(body);
-} catch (err) {
-console.error("KPI computation failed:", err);
-return { statusCode: 500, body: "KPI computation failed" };
-}
-
-// --- Set cache ---
-try {
-await redis.set(key, {
-payload,
-meta: { sk, model_version: "V3.5.14", last_refreshed_at: nowIso, consistency_window_days: windowDays }
-});
-} catch (err) {
-console.error("Redis SET failed:", err);
-}
-
-return {
-statusCode: 200,
-headers: { "Content-Type": "application/json", "ETag": sk, "Last-Modified": nowIso },
-body: JSON.stringify(payload)
-};
+  return {
+    statusCode: 200,
+    headers: { "Content-Type":"application/json", "ETag": sk, "Last-Modified": nowIso },
+    body: JSON.stringify(payload)
+  };
 };

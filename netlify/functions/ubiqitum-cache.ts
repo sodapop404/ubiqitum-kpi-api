@@ -3,8 +3,11 @@ import type { Handler } from "@netlify/functions";
 import crypto from "crypto";
 import { Redis } from "@upstash/redis";
 
+// 1. IMPORT THE HANDLER FOR DIRECT CALLING
+// Assuming ubiqitum-kpi is in the same functions directory
+import { handler as kpiHandler } from "./ubiqitum-kpi"; 
+
 // --- CORS Configuration ---
-// IMPORTANT: Replace this with your actual Webflow domain in production.
 const ALLOWED_ORIGIN = "https://ubiqitum-freemium.webflow.io"; 
 // --------------------------
 
@@ -30,22 +33,26 @@ function buildSK(args:{brand_url:string,brand_name?:string,market?:string,sector
 }
 
 export const handler: Handler = async (event) => {
-    // 1. Handle Preflight/Non-POST requests
+    // 1. Handle Preflight/Non-POST requests (CORS remains)
     if (event.httpMethod === "OPTIONS") {
-        // Handle CORS preflight request by immediately responding with allowed headers
         return {
-            statusCode: 204, // No Content
+            statusCode: 204, 
             headers: {
                 "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
                 "Access-Control-Allow-Methods": "POST, OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type",
-                "Access-Control-Max-Age": "86400", // Cache preflight for 24 hours
+                "Access-Control-Max-Age": "86400", 
             },
         };
     }
     
     if (event.httpMethod !== "POST") return { statusCode: 405, body: "POST only" };
-    // Add CORS header to error responses too, just in case
+    
+    // Setup generic headers
+    const successHeaders = { 
+        "Content-Type": "application/json", 
+        "Access-Control-Allow-Origin": ALLOWED_ORIGIN 
+    };
     const errorHeaders = { "Access-Control-Allow-Origin": ALLOWED_ORIGIN };
 
     const body = JSON.parse(event.body || "{}");
@@ -55,12 +62,6 @@ export const handler: Handler = async (event) => {
     const sk = buildSK(body);
     const windowDays = Number(body.consistency_window_days ?? 180);
     const mode = body.stability_mode || "pinned";
-
-    // Standard Success Headers
-    const successHeaders = { 
-        "Content-Type": "application/json", 
-        "Access-Control-Allow-Origin": ALLOWED_ORIGIN 
-    };
 
     // try cache
     const key = `ubiqitum:sk:${sk}`;
@@ -73,17 +74,36 @@ export const handler: Handler = async (event) => {
       if (fresh) {
         return {
             statusCode: 200,
-            headers: { ...successHeaders, "ETag": sk, "Last-Modified": cached.meta.last_refreshed_at }, // ADDED CORS HERE
+            headers: { ...successHeaders, "ETag": sk, "Last-Modified": cached.meta.last_refreshed_at },
             body: JSON.stringify(cached.payload)
         };
       }
     }
 
-    // recompute via main endpoint
-    const res = await fetch('/.netlify/functions/ubiqitum-kpi', { // same site call
-      method: "POST", headers: { "Content-Type":"application/json" }, body: JSON.stringify(body)
-    });
-    const payload = await res.json();
+    // 2. DIRECT CALL TO THE KPI FUNCTION (REPLACING THE fetch CALL)
+    
+    // Create a mock event object for the kpiHandler
+    const mockEvent = {
+        ...event, // Inherit necessary context from the original event
+        httpMethod: 'POST', // Ensure the sub-handler runs correctly
+        body: JSON.stringify(body),
+        // Headers and path may need cleaning if the kpiHandler is sensitive
+    };
+    
+    // Direct synchronous call (using await)
+    const kpiResponse = await kpiHandler(mockEvent, {} as any, () => {});
+    
+    // We assume kpiResponse is { statusCode: 200, body: 'JSON string', ... }
+    if (kpiResponse.statusCode !== 200) {
+        // Handle failure of the inner function
+        return {
+            statusCode: kpiResponse.statusCode || 500,
+            headers: errorHeaders,
+            body: `KPI computation failed: ${kpiResponse.body}`
+        };
+    }
+    
+    const payload = JSON.parse(kpiResponse.body || "{}");
 
     // set cache
     await redis.set(key, {
@@ -93,7 +113,7 @@ export const handler: Handler = async (event) => {
 
     return {
       statusCode: 200,
-      headers: { ...successHeaders, "ETag": sk, "Last-Modified": nowIso }, // ADDED CORS HERE
+      headers: { ...successHeaders, "ETag": sk, "Last-Modified": nowIso },
       body: JSON.stringify(payload)
     };
 };

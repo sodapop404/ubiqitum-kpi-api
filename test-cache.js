@@ -1,6 +1,6 @@
 import fetch from "node-fetch";
 
-const FUNCTION_URL = "https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqitum-cache";
+const FUNCTION_URL = "https://ubiqitum-kpi.netlify.app/.netlify/functions/ubiqitum-kpi";
 // Replace with your deployed Netlify function URL
 
 const payload = {

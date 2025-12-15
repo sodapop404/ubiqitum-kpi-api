@@ -4,15 +4,14 @@ import type { Handler } from "@netlify/functions";
 // CONFIGURATION AND CONSTANTS
 // ====================================================================
 
-// Define the CORS headers to allow requests from your Webflow site (or any origin)
 const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*", // IMPORTANT: Allows any domain to access this function
+  "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
 // --------------------------
-// FULL SYSTEM PROMPT (UNCHANGED)
+// FULL SYSTEM PROMPT
 // --------------------------
 const SYSTEM_PROMPT = `MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 
@@ -89,10 +88,10 @@ SCORING PRECEDENCE (per KPI field)
 
 OVERALL COMPOSITE
 ubiqitum_overallagainastallcompany_score =
-  0.35*brand_consideration_percent +
-  0.30*brand_trust_percent +
-  0.20*brand_relevance_percent +
-  0.15*brand_awareness_percent
+  0.35*brand_consideration_percent +
+  0.30*brand_trust_percent +
+  0.20*brand_relevance_percent +
+  0.15*brand_awareness_percent
 
 FINALISATION (strict key order)
 Return a single JSON object with keys in this exact order:
@@ -103,7 +102,7 @@ brand_consideration_percent, brand_trust_percent,
 ubiqitum_overallagainastallcompany_score
 `;
 
-// Required output keys (UNCHANGED)
+// Required output keys
 const REQUIRED_KEYS = [
   "brand_name","canonical_domain","ubiqitum_market","ubiqitum_sector",
   "brand_relevance_percent","sector_relevance_avg_percent",
@@ -112,7 +111,7 @@ const REQUIRED_KEYS = [
   "ubiqitum_overallagainastallcompany_score"
 ] as const;
 
-// Deterministic normalization (UNCHANGED)
+// Deterministic normalization
 function normalise(json: any, seedInt: number) {
   const clamp = (x:number)=>Math.max(0,Math.min(100,x));
   const round2=(x:number)=>Math.round((x+Number.EPSILON)*100)/100;
@@ -136,28 +135,29 @@ function normalise(json: any, seedInt: number) {
 }
 
 // =============================================================================
-// MAIN NETLIFY FUNCTION (REVISED)
+// MAIN NETLIFY FUNCTION
 // =============================================================================
 export const handler: Handler = async (event) => {
 
-  // 1. Handle Preflight OPTIONS request for CORS
+  // Handle OPTIONS preflight
   if (event.httpMethod === "OPTIONS") {
     return {
-      statusCode: 204, // 204 No Content is the standard response for a successful OPTIONS
+      statusCode: 204,
       headers: CORS_HEADERS,
       body: "",
     };
   }
 
-  // 2. Enforce POST method
+  // Enforce POST
   if (event.httpMethod !== "POST") {
     return { 
       statusCode: 405, 
-      headers: CORS_HEADERS, // Ensure CORS headers are present even on error
+      headers: CORS_HEADERS,
       body: "POST only" 
     };
   }
 
+  // Parse body
   let body: any = {};
   try {
     body = JSON.parse(event.body || "{}");
@@ -201,8 +201,7 @@ export const handler: Handler = async (event) => {
         max_tokens: 2000
       })
     });
-    
-    // Check if the model API itself returned an error status
+
     if (!resp.ok) {
         rawText = await resp.text();
         console.error("LLM API Status Error:", resp.status, rawText);
@@ -219,31 +218,19 @@ export const handler: Handler = async (event) => {
     };
   }
 
-  // Safe JSON extraction: Robustly find and parse the inner JSON block
+  // Parse model JSON safely
   let llmJson: any = {};
   try {
       const data = JSON.parse(rawText);
-      
-      // Attempt to find the JSON string within the response content
       let jsonString = data.choices?.[0]?.message?.content || "{}";
-      
-      // Clean up surrounding text/whitespace if the model wraps the JSON
       jsonString = jsonString.trim();
-      
-      // If the model output starts with a code block, strip it
-      if (jsonString.startsWith('```json')) {
-          jsonString = jsonString.substring(7);
-      }
-      if (jsonString.endsWith('```')) {
-          jsonString = jsonString.substring(0, jsonString.length - 3);
-      }
-      
+      if (jsonString.startsWith('```json')) jsonString = jsonString.substring(7);
+      if (jsonString.endsWith('```')) jsonString = jsonString.substring(0, jsonString.length - 3);
       llmJson = JSON.parse(jsonString);
-      
   } catch (err) {
     console.warn("Final LLM JSON Parsing failed:", err);
     return {
-      statusCode: 502, // Bad Gateway/Parsing Error
+      statusCode: 502,
       headers: CORS_HEADERS,
       body: JSON.stringify({ error: "Could not parse final JSON from model output", detail: String(err), raw_llm_response: rawText })
     };
@@ -252,16 +239,16 @@ export const handler: Handler = async (event) => {
   const seed = Number.isInteger(body.seed) ? body.seed : 0;
   const out = normalise(llmJson, seed);
 
-  // 3. Final success response
+  // Success response with raw LLM response included
   return {
     statusCode: 200,
     headers: { 
       "Content-Type": "application/json",
-      ...CORS_HEADERS // Include CORS headers here
+      ...CORS_HEADERS
     },
     body: JSON.stringify({
       input_payload: body,
-      // ai_raw_response: rawText, // Optional: You can remove this to reduce payload size
+      ai_raw_response: rawText,
       normalized_output: out
     }, null, 2)
   };

@@ -1,13 +1,6 @@
 // netlify/functions/ubiqitum-kpi.ts
 import type { Handler } from "@netlify/functions";
 
-// --- Configuration ---
-const CORS_ORIGIN = "https://ubiqitum-freemium.webflow.io"; // <-- CRITICAL: Update if Webflow domain changes!
-const MAX_TOKENS = 1024; // Increased from 350 to avoid 'finish_reason: length' errors.
-
-// ====================================================================
-// MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
-// ====================================================================
 const SYSTEM_PROMPT = `MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 Stable • Deterministic • URL-First • Eleven-Field Strict JSON (KPIs + Meta)
 
@@ -42,8 +35,8 @@ User will supply at least:
 
 Optional:
 - seed: <int>
-- stability_mode: <"pinned"|"live"> (default "pinned")
-- consistency_window_days: <int> (default 180)
+- stability_mode: <"pinned"|"live">  (default "pinned")
+- consistency_window_days: <int>      (default 180)
 - evidence_history: <array of prior eleven-field JSONs with timestamps>
 
 Advanced overrides (if provided, they replace inference):
@@ -132,124 +125,68 @@ Return a single JSON object with keys in this exact order:
 For numeric fields: Clamp → Round (2dp) → Avoid *.00/*.50 deterministically → Reclamp → Emit.
 For string fields: Emit resolved values exactly.
 Output the JSON object ONLY — nothing else.`;
-// ====================================================================
 
 const REQUIRED_KEYS = [
- "brand_name","canonical_domain","ubiqitum_market","ubiqitum_sector",
- "brand_relevance_percent","sector_relevance_avg_percent",
- "brand_awareness_percent","sector_awareness_avg_percent",
- "brand_consideration_percent","brand_trust_percent",
- "ubiqitum_overallagainastallcompany_score"
+ "brand_name","canonical_domain","ubiqitum_market","ubiqitum_sector",
+ "brand_relevance_percent","sector_relevance_avg_percent",
+ "brand_awareness_percent","sector_awareness_avg_percent",
+ "brand_consideration_percent","brand_trust_percent",
+ "ubiqitum_overallagainastallcompany_score"
 ] as const;
 
 function normalise(json: any, seedInt: number) {
-  const clamp = (x:number)=>Math.max(0,Math.min(100,x));
-  const round2=(x:number)=>Math.round((x+Number.EPSILON)*100)/100;
-  const avoid=(x:number)=>{ const s=x.toFixed(2); if(s.endsWith("00")||s.endsWith("50")){ x=clamp(x + (seedInt%2===0?0.01:-0.01)); x=round2(x);} return parseFloat(x.toFixed(2)); };
-  const out:any = {};
-  for (const k of REQUIRED_KEYS) {
-    const v = json[k];
-    if (typeof v === "number") out[k] = avoid(round2(clamp(v)));
-    else if (v === null || typeof v === "string") out[k] = v;
-    else out[k] = (v==null)?null:v;
-  }
-  return out;
+  const clamp = (x:number)=>Math.max(0,Math.min(100,x));
+  const round2=(x:number)=>Math.round((x+Number.EPSILON)*100)/100;
+  const avoid=(x:number)=>{ const s=x.toFixed(2); if(s.endsWith("00")||s.endsWith("50")){ x=clamp(x + (seedInt%2===0?0.01:-0.01)); x=round2(x);} return parseFloat(x.toFixed(2)); };
+  const out:any = {};
+  for (const k of REQUIRED_KEYS) {
+    const v = json[k];
+    if (typeof v === "number") out[k] = avoid(round2(clamp(v)));
+    else if (v === null || typeof v === "string") out[k] = v;
+    else out[k] = (v==null)?null:v; // leave strings for meta
+  }
+  return out;
 }
 
 export const handler: Handler = async (event) => {
-    const CORS_HEADERS = {
-        "Access-Control-Allow-Origin": CORS_ORIGIN,
-        "Access-Control-Allow-Headers": "Content-Type",
-    };
+  if (event.httpMethod !== "POST") return { statusCode: 405, body: "POST only" };
+  const body = JSON.parse(event.body || "{}");
+  const { brand_url } = body;
+  if (!brand_url) return { statusCode: 400, body: "brand_url required" };
 
-    if (event.httpMethod === "OPTIONS") {
-        return { statusCode: 200, headers: CORS_HEADERS };
-    }
-    if (event.httpMethod !== "POST") return { statusCode: 405, body: "POST only", headers: CORS_HEADERS };
-  
-  try {
-    const body = JSON.parse(event.body || "{}");
-    const { brand_url } = body;
-    if (!brand_url) return { statusCode: 400, body: "brand_url required", headers: CORS_HEADERS };
+  // build your model call (OpenAI-compatible or OSS gateway)
+  const messages = [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: JSON.stringify(body) }
+  ];
 
-    // Build model call
-    const messages = [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: JSON.stringify(body) }
-    ];
+  // Example OpenAI-compatible call (adjust base URL & key)
+  const resp = await fetch(process.env.MODEL_BASE_URL!, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.MODEL_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: process.env.MODEL_NAME || "gpt-oss-20b",
+      messages,
+      temperature: 0.2,
+      top_p: 0.9,
+      max_tokens: 350
+    })
+  });
 
-    // Check for environment variables
-    if (!process.env.MODEL_BASE_URL || !process.env.MODEL_API_KEY) {
-      console.error("FATAL: Model credentials missing.");
-      return { statusCode: 500, body: "Server configuration error: Model credentials missing.", headers: CORS_HEADERS };
-    }
+  const data = await resp.json();
+  const text = data.choices?.[0]?.message?.content || "{}";
+  const json = JSON.parse(text);
 
-    // Execute API call
-    const resp = await fetch(process.env.MODEL_BASE_URL, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${process.env.MODEL_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: process.env.MODEL_NAME || "gpt-oss-20b",
-        messages, 
-        temperature: 0.2, 
-        top_p: 0.9, 
-        max_tokens: MAX_TOKENS // <-- Increased Token Limit
-      })
-    });
-    
-    // CRITICAL ERROR CHECK 1: Check HTTP Status Code
-    if (!resp.ok) {
-        const errorText = await resp.text();
-        console.error(`Model API call failed with status ${resp.status}:`, errorText);
-        return { statusCode: 502, body: JSON.stringify({ error: "External Model API Failed", status: resp.status, detail: errorText.slice(0, 100) }), headers: CORS_HEADERS };
-    }
+  // derive seed deterministically if not in body
+  const seed = Number.isInteger(body.seed) ? body.seed : 0;
+  const out = normalise(json, seed);
 
-    const data = await resp.json();
-    let text = data.choices?.[0]?.message?.content; 
-    
-    // FIX: Fallback for non-standard providers that miss 'message.content' or have an incomplete structure
-    if (!text && data.choices?.[0]) {
-        if (data.choices[0].text) {
-            text = data.choices[0].text; // Try choices[0].text
-        } else if (data.choices[0].message && typeof data.choices[0].message === 'string') {
-             text = data.choices[0].message; // Try choices[0].message if it's a string
-        }
-    }
-    
-    if (data.choices?.[0]?.finish_reason === 'length') {
-        console.warn("Model stopped due to max_tokens limit. Output is potentially incomplete JSON.");
-    }
-    
-    // CRITICAL ERROR CHECK 2: Check for expected model output
-    if (!text) {
-        console.error("Model API returned OK status but no content in expected paths. Full response data:", data);
-        return { statusCode: 500, body: JSON.stringify({ error: "Model output empty or unexpected structure." }), headers: CORS_HEADERS };
-    }
-    
-    // Log the raw text output for debugging the JSON parsing
-    console.log("Model Raw Text Output (Length: " + text.length + "):", text.slice(0, 500) + (text.length > 500 ? '...' : ''));
-
-    let json: any;
-    try {
-      json = JSON.parse(text.trim()); // trim to help with stray characters/whitespace
-    } catch (e) {
-      console.error("Failed to parse JSON from model output:", e, "Raw text (start):", text.slice(0, 200));
-      return { statusCode: 500, body: JSON.stringify({ error: "Model output was not valid JSON." }), headers: CORS_HEADERS };
-    }
-
-    const seed = Number.isInteger(body.seed) ? body.seed : 0;
-    const out = normalise(json, seed);
-    
-    console.log("Normalized Output to be returned:", out); 
-
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json", ...CORS_HEADERS },
-      body: JSON.stringify(out)
-    };
-
-  } catch (e) {
-    console.error("An unexpected error occurred in ubiqitum-kpi handler:", e);
-    return { statusCode: 500, body: "Internal Server Error during KPI processing.", headers: CORS_HEADERS };
-  }
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(out)
+  };
 };

@@ -6,7 +6,7 @@ import crypto from "crypto";
 import { Redis } from "@upstash/redis";
 import { handler as kpiHandler } from "./ubiqitum-kpi"; // CRITICAL: Direct Import
 
-throw new Error("🔥 FUNCTION EXECUTED 🔥");
+
 
 const redis = Redis.fromEnv(); // UPSTASH_REDIS_REST_URL / _TOKEN
 
@@ -30,6 +30,9 @@ function buildSK(args:{brand_url:string,brand_name?:string,market?:string,sector
 }
 
 export const handler: Handler = async (event) => {
+   console.log("🔥 FUNCTION EXECUTED 🔥");
+  console.log("Method:", event.httpMethod);
+  console.log("Body:", event.body);
   const CORS_HEADERS = {
     "Access-Control-Allow-Origin": "https://ubiqitum-freemium.webflow.io", // <--- REPLACE WITH YOUR WEBFLOW DOMAIN
     "Access-Control-Allow-Headers": "Content-Type",

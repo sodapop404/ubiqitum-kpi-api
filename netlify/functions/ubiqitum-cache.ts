@@ -60,7 +60,7 @@ function isValidKpiPayload(payload: any): boolean {
     return Number.isFinite(n);
   }).length;
 
-  // Allow partial validity (3/4)
+  // Require at least 3 of 4 metrics
   return validCount >= 3;
 }
 
@@ -91,6 +91,8 @@ export const handler: Handler = async (event) => {
     "Access-Control-Allow-Methods": "POST, OPTIONS"
   };
 
+  console.log("🔥 ubiqitum-cache invoked", { method: event.httpMethod });
+
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: CORS_HEADERS };
   }
@@ -114,6 +116,8 @@ export const handler: Handler = async (event) => {
     const cached = await redis.get<any>(redisKey);
 
     let cacheStatus: "hit" | "stale" | "invalid" | "degraded" | "miss" = "miss";
+    let payloadValid = false;
+    let withinWindow = false;
 
     // --------------------------------------------------------------
     // Cache evaluation
@@ -122,10 +126,8 @@ export const handler: Handler = async (event) => {
       const last = new Date(cached.meta?.last_refreshed_at || nowIso);
       const ageDays = (Date.now() - last.getTime()) / 86400000;
 
-      const withinWindow =
-        ageDays <= (cached.meta?.consistency_window_days ?? windowDays);
-
-      const payloadValid = isValidKpiPayload(cached.payload);
+      withinWindow = ageDays <= (cached.meta?.consistency_window_days ?? windowDays);
+      payloadValid = isValidKpiPayload(cached.payload);
 
       if (withinWindow && payloadValid) {
         cacheStatus = "hit";
@@ -135,9 +137,16 @@ export const handler: Handler = async (event) => {
         cacheStatus = "invalid";
       }
 
-      // Serve degraded cache without recompute
+      // Degraded cache: serve anyway without KPI
       if (withinWindow && !payloadValid) {
         cacheStatus = "degraded";
+        console.log("🟠 Cache degraded", {
+          sk,
+          cacheStatus,
+          withinWindow,
+          payloadValid,
+          cachedValues: cached.payload
+        });
         return {
           statusCode: 200,
           headers: {
@@ -145,14 +154,12 @@ export const handler: Handler = async (event) => {
             "X-Cache-Status": cacheStatus,
             ...CORS_HEADERS
           },
-          body: JSON.stringify({
-            ...cached.payload,
-            cache_status: cacheStatus
-          })
+          body: JSON.stringify({ ...cached.payload, cache_status: cacheStatus })
         };
       }
 
       if (cacheStatus === "hit") {
+        console.log("🟢 Cache HIT", { sk, cacheStatus, cachedValues: cached.payload });
         return {
           statusCode: 200,
           headers: {
@@ -160,17 +167,17 @@ export const handler: Handler = async (event) => {
             "X-Cache-Status": cacheStatus,
             ...CORS_HEADERS
           },
-          body: JSON.stringify({
-            ...cached.payload,
-            cache_status: cacheStatus
-          })
+          body: JSON.stringify({ ...cached.payload, cache_status: cacheStatus })
         };
       }
+
+      console.log("🟡 Cache requires KPI refresh", { sk, cacheStatus });
     }
 
     // --------------------------------------------------------------
     // KPI invocation
     // --------------------------------------------------------------
+    console.log("➡️ Invoking KPI", { sk, cacheStatus });
     const kpiUrl = `${process.env.URL}/.netlify/functions/ubiqitum-kpi`;
     const kpiRes = await fetch(kpiUrl, {
       method: "POST",
@@ -178,10 +185,18 @@ export const handler: Handler = async (event) => {
       body: JSON.stringify(body)
     });
 
-    const payload = JSON.parse(await kpiRes.text());
-    const valid = isValidKpiPayload(payload);
+    const rawText = await kpiRes.text();
+    let payload: any;
+    try {
+      payload = JSON.parse(rawText);
+    } catch {
+      console.error("❌ KPI response not valid JSON", { sk, rawText });
+      throw new Error("Invalid JSON from KPI");
+    }
 
+    const valid = isValidKpiPayload(payload);
     if (!valid) {
+      console.error("❌ KPI returned invalid payload", { sk, payload });
       return {
         statusCode: 502,
         headers: CORS_HEADERS,
@@ -204,6 +219,8 @@ export const handler: Handler = async (event) => {
       { ex: windowDays * 86400 }
     );
 
+    console.log("🟢 KPI completed & cached", { sk, cacheStatus });
+
     return {
       statusCode: 200,
       headers: {
@@ -211,14 +228,10 @@ export const handler: Handler = async (event) => {
         "X-Cache-Status": cacheStatus === "miss" ? "miss" : cacheStatus,
         ...CORS_HEADERS
       },
-      body: JSON.stringify({
-        ...payload,
-        cache_status: cacheStatus === "miss" ? "miss" : cacheStatus
-      })
+      body: JSON.stringify({ ...payload, cache_status: cacheStatus === "miss" ? "miss" : cacheStatus })
     };
-
   } catch (err) {
-    console.error("🔥 cache fatal error", err);
+    console.error("🔥 ubiqitum-cache fatal error", err);
     return {
       statusCode: 500,
       headers: CORS_HEADERS,

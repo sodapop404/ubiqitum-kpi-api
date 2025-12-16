@@ -44,8 +44,8 @@ function buildSK(args: {
 }
 
 /**
- * Determines whether the KPI payload is usable.
- * Any null / undefined / NaN values force a refresh.
+ * Accepts numbers OR numeric strings.
+ * Rejects null / undefined / NaN / non-numeric values.
  */
 function isValidKpiPayload(payload: any): boolean {
   if (!payload || typeof payload !== "object") return false;
@@ -57,12 +57,33 @@ function isValidKpiPayload(payload: any): boolean {
     "sector_awareness_avg_percent"
   ];
 
-  return requiredFields.every(
-    (key) =>
-      payload[key] !== null &&
-      payload[key] !== undefined &&
-      Number.isFinite(payload[key])
-  );
+  return requiredFields.every((key) => {
+    const v = payload[key];
+    if (v === null || v === undefined) return false;
+
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n);
+  });
+}
+
+/**
+ * Normalises KPI fields to numbers so cached data is consistent.
+ */
+function normaliseKpiPayload(payload: any) {
+  const fields = [
+    "brand_relevance_percent",
+    "brand_awareness_percent",
+    "sector_relevance_avg_percent",
+    "sector_awareness_avg_percent"
+  ];
+
+  for (const f of fields) {
+    if (payload[f] !== undefined && payload[f] !== null) {
+      payload[f] = Number(payload[f]);
+    }
+  }
+
+  return payload;
 }
 
 // ------------------------------------------------------------------
@@ -140,11 +161,12 @@ export const handler: Handler = async (event) => {
         };
       }
 
-      if (!payloadValid) {
-        console.warn("🟠 Cache INVALID (null KPI values) — refreshing:", sk);
-      } else {
-        console.warn("🟠 Cache STALE — refreshing:", sk);
-      }
+      console.warn(
+        payloadValid
+          ? "🟠 Cache STALE — refreshing:"
+          : "🟠 Cache INVALID (null / non-numeric KPI) — refreshing:",
+        sk
+      );
     }
 
     console.log("🟡 Cache MISS — invoking KPI function");
@@ -182,16 +204,18 @@ export const handler: Handler = async (event) => {
     }
 
     // --------------------------------------------------------------
-    // Validate KPI response BEFORE caching
+    // Validate + normalise KPI payload
     // --------------------------------------------------------------
     if (!isValidKpiPayload(payload)) {
-      console.error("❌ KPI returned invalid / incomplete payload — not caching");
+      console.error("❌ KPI returned invalid payload — not caching");
       return {
         statusCode: 502,
         headers: CORS_HEADERS,
         body: "KPI returned incomplete data"
       };
     }
+
+    payload = normaliseKpiPayload(payload);
 
     // --------------------------------------------------------------
     // Cache store

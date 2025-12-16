@@ -43,14 +43,48 @@ function buildSK(args: {
   return sha256(parts.join("|"));
 }
 
+function isValidKpiPayload(payload: any): boolean {
+  if (!payload || typeof payload !== "object") return false;
+
+  const fields = [
+    "brand_relevance_percent",
+    "brand_awareness_percent",
+    "sector_relevance_avg_percent",
+    "sector_awareness_avg_percent"
+  ];
+
+  const validCount = fields.filter((key) => {
+    const v = payload[key];
+    if (v === null || v === undefined || v === "") return false;
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n);
+  }).length;
+
+  // Allow partial validity (3/4)
+  return validCount >= 3;
+}
+
+function normaliseKpiPayload(payload: any) {
+  const fields = [
+    "brand_relevance_percent",
+    "brand_awareness_percent",
+    "sector_relevance_avg_percent",
+    "sector_awareness_avg_percent"
+  ];
+
+  for (const f of fields) {
+    if (payload[f] !== undefined && payload[f] !== null) {
+      payload[f] = Number(payload[f]);
+    }
+  }
+
+  return payload;
+}
+
 // ------------------------------------------------------------------
 // Handler
 // ------------------------------------------------------------------
 export const handler: Handler = async (event) => {
-  console.log("🔥 ubiqitum-cache invoked");
-  console.log("Method:", event.httpMethod);
-  console.log("Raw body:", event.body);
-
   const CORS_HEADERS = {
     "Access-Control-Allow-Origin": "https://ubiqitum-freemium.webflow.io",
     "Access-Control-Allow-Headers": "Content-Type",
@@ -67,97 +101,102 @@ export const handler: Handler = async (event) => {
 
   try {
     const body = JSON.parse(event.body || "{}");
-    const { brand_url } = body;
-
-    if (!brand_url) {
-      return {
-        statusCode: 400,
-        headers: CORS_HEADERS,
-        body: "brand_url required"
-      };
+    if (!body.brand_url) {
+      return { statusCode: 400, headers: CORS_HEADERS, body: "brand_url required" };
     }
 
-    // --------------------------------------------------------------
-    // Cache key
-    // --------------------------------------------------------------
     const sk = buildSK(body);
     const windowDays = Number(body.consistency_window_days ?? 180);
     const mode = body.stability_mode || "pinned";
     const nowIso = new Date().toISOString();
 
     const redisKey = `ubiqitum:sk:${sk}`;
-    const cached = await redis.get<{
-      payload: any;
-      meta: any;
-    }>(redisKey);
+    const cached = await redis.get<any>(redisKey);
 
+    let cacheStatus: "hit" | "stale" | "invalid" | "degraded" | "miss" = "miss";
+
+    // --------------------------------------------------------------
+    // Cache evaluation
+    // --------------------------------------------------------------
     if (cached && mode === "pinned") {
-      const last = new Date(cached.meta.last_refreshed_at || nowIso);
-      const ageDays =
-        (Date.now() - last.getTime()) / 86400000;
+      const last = new Date(cached.meta?.last_refreshed_at || nowIso);
+      const ageDays = (Date.now() - last.getTime()) / 86400000;
 
-      if (ageDays <= (cached.meta.consistency_window_days ?? windowDays)) {
-        console.log("🟢 Cache HIT:", sk);
+      const withinWindow =
+        ageDays <= (cached.meta?.consistency_window_days ?? windowDays);
+
+      const payloadValid = isValidKpiPayload(cached.payload);
+
+      if (withinWindow && payloadValid) {
+        cacheStatus = "hit";
+      } else if (!withinWindow) {
+        cacheStatus = "stale";
+      } else if (!payloadValid) {
+        cacheStatus = "invalid";
+      }
+
+      // Serve degraded cache without recompute
+      if (withinWindow && !payloadValid) {
+        cacheStatus = "degraded";
         return {
           statusCode: 200,
           headers: {
             "Content-Type": "application/json",
-            "ETag": sk,
-            "Last-Modified": cached.meta.last_refreshed_at,
+            "X-Cache-Status": cacheStatus,
             ...CORS_HEADERS
           },
-          body: JSON.stringify(cached.payload)
+          body: JSON.stringify({
+            ...cached.payload,
+            cache_status: cacheStatus
+          })
+        };
+      }
+
+      if (cacheStatus === "hit") {
+        return {
+          statusCode: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Cache-Status": cacheStatus,
+            ...CORS_HEADERS
+          },
+          body: JSON.stringify({
+            ...cached.payload,
+            cache_status: cacheStatus
+          })
         };
       }
     }
 
-    console.log("🟡 Cache MISS — invoking KPI function");
-
     // --------------------------------------------------------------
-    // CALL KPI FUNCTION **VIA HTTP**
+    // KPI invocation
     // --------------------------------------------------------------
-    const kpiUrl =
-      `${process.env.URL}/.netlify/functions/ubiqitum-kpi`;
-
-    console.log("➡️ Calling KPI:", kpiUrl);
-
+    const kpiUrl = `${process.env.URL}/.netlify/functions/ubiqitum-kpi`;
     const kpiRes = await fetch(kpiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
 
-    const rawText = await kpiRes.text();
+    const payload = JSON.parse(await kpiRes.text());
+    const valid = isValidKpiPayload(payload);
 
-    console.log("🟦 KPI status:", kpiRes.status);
-    console.log("🟦 KPI raw response:", rawText);
-
-    if (!kpiRes.ok) {
+    if (!valid) {
       return {
-        statusCode: kpiRes.status,
+        statusCode: 502,
         headers: CORS_HEADERS,
-        body: rawText
+        body: "KPI returned invalid payload"
       };
     }
 
-    let payload: any;
-    try {
-      payload = JSON.parse(rawText);
-    } catch (err) {
-      console.error("❌ KPI response not valid JSON");
-      throw err;
-    }
+    normaliseKpiPayload(payload);
 
-    // --------------------------------------------------------------
-    // Cache store
-    // --------------------------------------------------------------
     await redis.set(
       redisKey,
       {
         payload,
         meta: {
           sk,
-          model_version: "V3.5.14",
           last_refreshed_at: nowIso,
           consistency_window_days: windowDays
         }
@@ -165,25 +204,25 @@ export const handler: Handler = async (event) => {
       { ex: windowDays * 86400 }
     );
 
-    console.log("🟢 Cached SK:", sk);
-
     return {
       statusCode: 200,
       headers: {
         "Content-Type": "application/json",
-        "ETag": sk,
-        "Last-Modified": nowIso,
+        "X-Cache-Status": cacheStatus === "miss" ? "miss" : cacheStatus,
         ...CORS_HEADERS
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        ...payload,
+        cache_status: cacheStatus === "miss" ? "miss" : cacheStatus
+      })
     };
 
   } catch (err) {
-    console.error("🔥 ubiqitum-cache fatal error:", err);
+    console.error("🔥 cache fatal error", err);
     return {
       statusCode: 500,
       headers: CORS_HEADERS,
-      body: "Internal cache/orchestration error"
+      body: "Internal cache error"
     };
   }
 };

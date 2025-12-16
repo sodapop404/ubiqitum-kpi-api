@@ -26,16 +26,17 @@ function sha256(s: string) {
   return crypto.createHash("sha256").update(s, "utf8").digest("hex");
 }
 
-function normaliseInputUrl(raw){
+function normaliseInputUrl(raw: string) {
   if (!raw || typeof raw !== "string") return "";
   raw = raw.trim();
-  // Add https:// if no scheme 
   if (!/^https?:\/\//i.test(raw)) raw = "https://" + raw;
-  try { const u = new URL(raw);
-       // Lowercase host; leave path/query as-is 
-       u.hostname = u.hostname.toLowerCase();
-       return u.href;
-      } catch { return ""; } 
+  try {
+    const u = new URL(raw);
+    u.hostname = u.hostname.toLowerCase();
+    return u.href;
+  } catch {
+    return "";
+  }
 }
 
 function buildSK(args: any) {
@@ -54,7 +55,7 @@ function buildSK(args: any) {
 }
 
 // --------------------------------------------------
-// KPI validation (CORRECT TARGET)
+// KPI validation
 // --------------------------------------------------
 function isValidKpiPayload(payload: any): boolean {
   if (!payload || typeof payload !== "object") return false;
@@ -68,7 +69,8 @@ function isValidKpiPayload(payload: any): boolean {
 
   return fields.filter((k) => {
     const v = payload[k];
-    return Number.isFinite(typeof v === "number" ? v : Number(v));
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) || v === null;
   }).length >= 3;
 }
 
@@ -104,16 +106,14 @@ export const handler: Handler = async (event) => {
 
   try {
     const body = JSON.parse(event.body || "{}");
+
+    // -----------------------------
+    // Normalize brand_url immediately
+    // -----------------------------
+    body.brand_url = normaliseInputUrl(body.brand_url);
     if (!body.brand_url) {
-      return { statusCode: 400, headers: CORS, body: "brand_url required" };
+      return { statusCode: 400, headers: CORS, body: "Invalid or missing brand_url" };
     }
-
-    // Normalize the brand_url
-body.brand_url = normaliseInputUrl(body.brand_url);
-
-if (!body.brand_url) {
-  return { statusCode: 400, headers: CORS, body: "Invalid brand_url" };
-}
 
     const sk = buildSK(body);
     const redisKey = `ubiqitum:sk:${sk}`;
@@ -128,13 +128,17 @@ if (!body.brand_url) {
     // Cache evaluation
     // --------------------------------------------------
     if (cached) {
+      // Normalize cached payload for validation
+      const cachedPayload = normaliseKpiPayload(cached.payload);
+
       const ageDays =
         (Date.now() - new Date(cached.meta.last_refreshed_at).getTime()) / 86400000;
 
       const withinWindow = ageDays <= cached.meta.consistency_window_days;
-      const payloadValid = isValidKpiPayload(cached.payload);
+      const payloadValid = isValidKpiPayload(cachedPayload);
 
       log("📦 Cache found", { sk, withinWindow, payloadValid });
+      log("Cached payload normalised:", cachedPayload);
 
       if (withinWindow && payloadValid) {
         cache_status = "hit";
@@ -142,7 +146,7 @@ if (!body.brand_url) {
         return {
           statusCode: 200,
           headers: { ...CORS, "X-Cache-Status": cache_status },
-          body: JSON.stringify({ ...cached.payload, cache_status })
+          body: JSON.stringify({ ...cachedPayload, cache_status })
         };
       }
 

@@ -3,7 +3,6 @@ import type { Handler } from "@netlify/functions";
 // ====================================================================
 // CONFIGURATION AND CONSTANTS
 // ====================================================================
-
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -22,7 +21,6 @@ function normaliseInputUrl(raw: string) {
 
   try {
     const u = new URL(raw);
-
     // Lowercase host; leave path/query as-is
     u.hostname = u.hostname.toLowerCase();
     return u.href;
@@ -126,6 +124,7 @@ URL NORMALISATION & DERIVED CONTEXT
 3. ubiqitum_market: provided → ccTLD → content/locales → "Global".
 4. ubiqitum_sector resolution (precision-first, deterministic):
    Resolve in this order and stop at first match:
+   
    1) If sector override is provided → use it verbatim.
    2) If page title or meta description (from the provided URL string) contains clear industry terms, map to a concise sector label (see Sector Mapper below).
    3) Else, infer from domain root tokens and path/slug keywords:
@@ -135,6 +134,7 @@ URL NORMALISATION & DERIVED CONTEXT
       • words like partners, network, enterprise, B2B, wholesale, integrator → B2B
       • words like store, retail, collection, menu, booking → B2C
    5) If still ambiguous, prefer the narrower of the plausible labels (e.g., prefer “B2B agency network” over “Marketing & Advertising”), and keep phrasing concise and consumer-facing.
+
 5. segment (priors only): infer from site; default B2C unless agency/enterprise/partners/network cues → B2B.
 6. timeframe default: "Current".
 
@@ -218,17 +218,16 @@ export const handler: Handler = async (event) => {
   // -----------------------------
   // Normalize brand_url immediately
   // -----------------------------
-  const brand_url_norm = normaliseInputUrl(body?.brand_url || "");
-  if (!brand_url_norm) {
+  body.brand_url = normaliseInputUrl(body.brand_url);
+  if (!body.brand_url) {
     return { 
       statusCode: 400, 
       headers: CORS_HEADERS,
-      body: JSON.stringify({ error: "brand_url required" }) 
+      body: JSON.stringify({ error: "Invalid or missing brand_url" }) 
     };
   }
-  body.brand_url = brand_url_norm;
 
-  // Compose messages
+  // Compose messages for LLM
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: JSON.stringify(body) }
@@ -286,10 +285,10 @@ export const handler: Handler = async (event) => {
     };
   }
 
+  // Normalize and return output
   const seed = Number.isInteger(body.seed) ? body.seed : 0;
   const out = normalise(llmJson, seed);
 
-  // Success response with raw LLM response included
   return {
     statusCode: 200,
     headers: { 

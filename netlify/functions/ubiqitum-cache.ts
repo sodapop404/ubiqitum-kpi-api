@@ -8,7 +8,7 @@ const redis = Redis.fromEnv();
 // --------------------------------------------------
 // Logging (Netlify-safe)
 // --------------------------------------------------
-function log(...args: any[]) {
+function log(...args: any) {
   console.log(...args);
   process.stdout.write("");
 }
@@ -54,9 +54,7 @@ function buildSK(args: any) {
   return sha256(parts.join("|"));
 }
 
-// --------------------------------------------------
-// KPI validation
-// --------------------------------------------------
+// Validate numeric KPI fields
 function isValidKpiPayload(payload: any): boolean {
   if (!payload || typeof payload !== "object") return false;
 
@@ -69,11 +67,11 @@ function isValidKpiPayload(payload: any): boolean {
 
   return fields.filter((k) => {
     const v = payload[k];
-    const n = typeof v === "number" ? v : Number(v);
-    return Number.isFinite(n) || v === null;
+    return Number.isFinite(typeof v === "number" ? v : Number(v));
   }).length >= 3;
 }
 
+// Convert numeric strings to numbers
 function normaliseKpiPayload(payload: any) {
   const out = { ...payload };
   Object.keys(out).forEach((k) => {
@@ -108,11 +106,11 @@ export const handler: Handler = async (event) => {
     const body = JSON.parse(event.body || "{}");
 
     // -----------------------------
-    // Normalize brand_url immediately
+    // Normalize brand_url first
     // -----------------------------
     body.brand_url = normaliseInputUrl(body.brand_url);
     if (!body.brand_url) {
-      return { statusCode: 400, headers: CORS, body: "Invalid or missing brand_url" };
+      return { statusCode: 400, headers: CORS, body: "Invalid brand_url" };
     }
 
     const sk = buildSK(body);
@@ -124,21 +122,24 @@ export const handler: Handler = async (event) => {
 
     let cache_status: "hit" | "stale" | "invalid" | "degraded" | "miss" = "miss";
 
-    // --------------------------------------------------
-    // Cache evaluation
-    // --------------------------------------------------
     if (cached) {
       // Normalize cached payload for validation
-      const cachedPayload = normaliseKpiPayload(cached.payload);
+      const normalizedCachedPayload = normaliseKpiPayload(
+        cached.payload?.normalized_output || cached.payload
+      );
 
       const ageDays =
         (Date.now() - new Date(cached.meta.last_refreshed_at).getTime()) / 86400000;
 
       const withinWindow = ageDays <= cached.meta.consistency_window_days;
-      const payloadValid = isValidKpiPayload(cachedPayload);
+      const payloadValid = isValidKpiPayload(normalizedCachedPayload);
 
-      log("📦 Cache found", { sk, withinWindow, payloadValid });
-      log("Cached payload normalised:", cachedPayload);
+      log("📦 Cache found", {
+        sk,
+        withinWindow,
+        payloadValid,
+        cachedPayload: normalizedCachedPayload
+      });
 
       if (withinWindow && payloadValid) {
         cache_status = "hit";
@@ -146,10 +147,11 @@ export const handler: Handler = async (event) => {
         return {
           statusCode: 200,
           headers: { ...CORS, "X-Cache-Status": cache_status },
-          body: JSON.stringify({ ...cachedPayload, cache_status })
+          body: JSON.stringify({ ...normalizedCachedPayload, cache_status })
         };
       }
 
+      // Mark degraded/invalid
       cache_status = withinWindow ? "invalid" : "stale";
     }
 
@@ -159,14 +161,11 @@ export const handler: Handler = async (event) => {
     log("➡️ Calling KPI", { sk, cache_status });
 
     try {
-      const kpiRes = await fetch(
-        `${process.env.URL}/.netlify/functions/ubiqitum-kpi`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
-        }
-      );
+      const kpiRes = await fetch(`${process.env.URL}/.netlify/functions/ubiqitum-kpi`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
 
       const text = await kpiRes.text();
       const raw = JSON.parse(text);
@@ -179,10 +178,11 @@ export const handler: Handler = async (event) => {
         throw new Error("KPI returned invalid payload");
       }
 
+      // Cache normalized payload
       await redis.set(
         redisKey,
         {
-          payload: kpiPayload,
+          payload: { normalized_output: kpiPayload },
           meta: {
             sk,
             last_refreshed_at: nowIso,
@@ -205,11 +205,16 @@ export const handler: Handler = async (event) => {
 
       if (cached?.payload) {
         cache_status = "degraded";
+
+        const degradedPayload = normaliseKpiPayload(
+          cached.payload?.normalized_output || cached.payload
+        );
+
         log("🟠 Returning degraded cache", sk);
         return {
           statusCode: 200,
           headers: { ...CORS, "X-Cache-Status": cache_status },
-          body: JSON.stringify({ ...cached.payload, cache_status })
+          body: JSON.stringify({ ...degradedPayload, cache_status })
         };
       }
 

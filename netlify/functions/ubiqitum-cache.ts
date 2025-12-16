@@ -42,7 +42,7 @@ function buildSK(args: any) {
 }
 
 // --------------------------------------------------
-// KPI validation (ONLY normalized KPI fields)
+// KPI validation (normalized_output only, relaxed)
 // --------------------------------------------------
 function isValidKpiPayload(payload: any): boolean {
   if (!payload || typeof payload !== "object") return false;
@@ -59,7 +59,7 @@ function isValidKpiPayload(payload: any): boolean {
     return Number.isFinite(typeof v === "number" ? v : Number(v));
   }).length;
 
-  return validCount >= 3;
+  return validCount >= 1; // relaxed: only 1 valid numeric field required
 }
 
 function normaliseKpiPayload(payload: any) {
@@ -100,32 +100,23 @@ export const handler: Handler = async (event) => {
 
     const sk = buildSK(body);
     const redisKey = `ubiqitum:sk:${sk}`;
-    const windowDays = 1; // 24 hours cache
+    const windowDays = 1; // 24-hour cache
     const nowIso = new Date().toISOString();
 
     const cached = await redis.get<any>(redisKey);
-
     let cache_status: "hit" | "stale" | "invalid" | "degraded" | "miss" = "miss";
 
     // --------------------------------------------------
-    // Cache evaluation (NORMALIZED OUTPUT ONLY)
+    // Cache evaluation (normalized_output only)
     // --------------------------------------------------
     if (cached?.normalized_output && cached?.meta) {
       const ageDays =
-        (Date.now() - new Date(cached.meta.last_refreshed_at).getTime()) / 86400000;
+        (Date.now() - new Date(cached.meta.last_refreshed_at).getTime()) /
+        86400000;
+      const withinWindow = ageDays <= cached.meta.consistency_window_days;
+      const payloadValid = isValidKpiPayload(cached.normalized_output);
 
-      const maxAge = Number(cached.meta.consistency_window_days ?? windowDays);
-      const withinWindow = ageDays <= maxAge;
-
-      const payloadValid =
-        isValidKpiPayload(cached.normalized_output);
-
-      log("📦 Cache found", {
-        sk,
-        withinWindow,
-        payloadValid,
-        keys: Object.keys(cached.normalized_output || {})
-      });
+      log("📦 Cache found", { sk, withinWindow, payloadValid });
 
       if (withinWindow && payloadValid) {
         cache_status = "hit";
@@ -134,10 +125,7 @@ export const handler: Handler = async (event) => {
         return {
           statusCode: 200,
           headers: { ...CORS, "X-Cache-Status": cache_status },
-          body: JSON.stringify({
-            ...cached.normalized_output,
-            cache_status
-          })
+          body: JSON.stringify({ ...cached.normalized_output, cache_status })
         };
       }
 
@@ -189,41 +177,33 @@ export const handler: Handler = async (event) => {
       return {
         statusCode: 200,
         headers: { ...CORS, "X-Cache-Status": cache_status },
-        body: JSON.stringify({
-          ...normalized,
-          cache_status
-        })
+        body: JSON.stringify({ ...normalized, cache_status })
       };
 
     } catch (kpiErr) {
       log("❌ KPI failed", kpiErr);
 
       // --------------------------------------------------
-      // Degraded fallback (normalized_output only)
+      // Degraded fallback (always)
       // --------------------------------------------------
-      if (cached?.normalized_output) {
-        cache_status = "degraded";
-        log("🟠 Returning degraded cache (normalized_output)", sk);
+      cache_status = "degraded";
+      log("🟠 Returning degraded cache (normalized_output or placeholder)", sk);
 
-        return {
-          statusCode: 200,
-          headers: { ...CORS, "X-Cache-Status": cache_status },
-          body: JSON.stringify({
-            ...cached.normalized_output,
-            cache_status
-          })
-        };
-      }
-
-      throw kpiErr;
+      return {
+        statusCode: 200,
+        headers: { ...CORS, "X-Cache-Status": cache_status },
+        body: JSON.stringify({
+          brand_relevance_percent: cached?.normalized_output?.brand_relevance_percent ?? null,
+          brand_awareness_percent: cached?.normalized_output?.brand_awareness_percent ?? null,
+          sector_relevance_avg_percent: cached?.normalized_output?.sector_relevance_avg_percent ?? null,
+          sector_awareness_avg_percent: cached?.normalized_output?.sector_awareness_avg_percent ?? null,
+          cache_status
+        })
+      };
     }
 
   } catch (err) {
     log("🔥 Fatal cache error", err);
-    return {
-      statusCode: 500,
-      headers: CORS,
-      body: "Cache error"
-    };
+    return { statusCode: 500, headers: CORS, body: "Cache error" };
   }
 };

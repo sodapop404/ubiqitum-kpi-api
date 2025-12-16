@@ -6,7 +6,7 @@ import { Redis } from "@upstash/redis";
 const redis = Redis.fromEnv();
 
 // --------------------------------------------------
-// Logging (Netlify-safe)
+// Logging (Netlify-safe flush)
 // --------------------------------------------------
 function log(...args: any[]) {
   console.log(...args);
@@ -42,7 +42,7 @@ function buildSK(args: any) {
 }
 
 // --------------------------------------------------
-// KPI validation (CORRECT TARGET)
+// KPI validation (ONLY normalized KPI fields)
 // --------------------------------------------------
 function isValidKpiPayload(payload: any): boolean {
   if (!payload || typeof payload !== "object") return false;
@@ -54,10 +54,12 @@ function isValidKpiPayload(payload: any): boolean {
     "sector_awareness_avg_percent"
   ];
 
-  return fields.filter((k) => {
-    const v = payload[k];
+  const validCount = fields.filter((key) => {
+    const v = payload[key];
     return Number.isFinite(typeof v === "number" ? v : Number(v));
-  }).length >= 3;
+  }).length;
+
+  return validCount >= 3;
 }
 
 function normaliseKpiPayload(payload: any) {
@@ -98,7 +100,7 @@ export const handler: Handler = async (event) => {
 
     const sk = buildSK(body);
     const redisKey = `ubiqitum:sk:${sk}`;
-    const windowDays = Number(body.consistency_window_days ?? 180);
+    const windowDays = 1; // 24 hours cache
     const nowIso = new Date().toISOString();
 
     const cached = await redis.get<any>(redisKey);
@@ -106,24 +108,36 @@ export const handler: Handler = async (event) => {
     let cache_status: "hit" | "stale" | "invalid" | "degraded" | "miss" = "miss";
 
     // --------------------------------------------------
-    // Cache evaluation
+    // Cache evaluation (NORMALIZED OUTPUT ONLY)
     // --------------------------------------------------
-    if (cached) {
+    if (cached?.normalized_output && cached?.meta) {
       const ageDays =
         (Date.now() - new Date(cached.meta.last_refreshed_at).getTime()) / 86400000;
 
-      const withinWindow = ageDays <= cached.meta.consistency_window_days;
-      const payloadValid = isValidKpiPayload(cached.payload);
+      const maxAge = Number(cached.meta.consistency_window_days ?? windowDays);
+      const withinWindow = ageDays <= maxAge;
 
-      log("📦 Cache found", { sk, withinWindow, payloadValid });
+      const payloadValid =
+        isValidKpiPayload(cached.normalized_output);
+
+      log("📦 Cache found", {
+        sk,
+        withinWindow,
+        payloadValid,
+        keys: Object.keys(cached.normalized_output || {})
+      });
 
       if (withinWindow && payloadValid) {
         cache_status = "hit";
-        log("🟢 Cache HIT", sk);
+        log("🟢 Cache HIT (normalized_output)", sk);
+
         return {
           statusCode: 200,
           headers: { ...CORS, "X-Cache-Status": cache_status },
-          body: JSON.stringify({ ...cached.payload, cache_status })
+          body: JSON.stringify({
+            ...cached.normalized_output,
+            cache_status
+          })
         };
       }
 
@@ -148,18 +162,19 @@ export const handler: Handler = async (event) => {
       const text = await kpiRes.text();
       const raw = JSON.parse(text);
 
-      const kpiPayload = normaliseKpiPayload(
-        raw.normalized_output ?? raw
-      );
+      const normalized =
+        normaliseKpiPayload(raw.normalized_output ?? raw);
 
-      if (!isValidKpiPayload(kpiPayload)) {
+      if (!isValidKpiPayload(normalized)) {
         throw new Error("KPI returned invalid payload");
       }
 
       await redis.set(
         redisKey,
         {
-          payload: kpiPayload,
+          input_payload: body,
+          ai_raw_response: raw,
+          normalized_output: normalized,
           meta: {
             sk,
             last_refreshed_at: nowIso,
@@ -174,19 +189,29 @@ export const handler: Handler = async (event) => {
       return {
         statusCode: 200,
         headers: { ...CORS, "X-Cache-Status": cache_status },
-        body: JSON.stringify({ ...kpiPayload, cache_status })
+        body: JSON.stringify({
+          ...normalized,
+          cache_status
+        })
       };
 
     } catch (kpiErr) {
       log("❌ KPI failed", kpiErr);
 
-      if (cached?.payload) {
+      // --------------------------------------------------
+      // Degraded fallback (normalized_output only)
+      // --------------------------------------------------
+      if (cached?.normalized_output) {
         cache_status = "degraded";
-        log("🟠 Returning degraded cache", sk);
+        log("🟠 Returning degraded cache (normalized_output)", sk);
+
         return {
           statusCode: 200,
           headers: { ...CORS, "X-Cache-Status": cache_status },
-          body: JSON.stringify({ ...cached.payload, cache_status })
+          body: JSON.stringify({
+            ...cached.normalized_output,
+            cache_status
+          })
         };
       }
 
@@ -195,6 +220,10 @@ export const handler: Handler = async (event) => {
 
   } catch (err) {
     log("🔥 Fatal cache error", err);
-    return { statusCode: 500, headers: CORS, body: "Cache error" };
+    return {
+      statusCode: 500,
+      headers: CORS,
+      body: "Cache error"
+    };
   }
 };

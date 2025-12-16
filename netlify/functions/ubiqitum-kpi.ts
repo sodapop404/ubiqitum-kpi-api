@@ -67,13 +67,21 @@ async function modelRequest(
 
     const data = await resp.json().catch(() => ({}));
 
-    if (!resp.ok) {
-      const msg = (data?.error?.message || "").toLowerCase();
-      if (msg.includes("max") || msg.includes("context") || msg.includes("length")) {
-        return { ok: false, reason: "exceeds_limit" };
-      }
-      return { ok: false, reason: "http_error", status: resp.status };
-    }
+if (!resp.ok) {
+  const errorText = await resp.text().catch(() => "");
+  console.error("[KPI][MODEL_HTTP_ERROR]", {
+    status: resp.status,
+    body: errorText,
+    url: env.MODEL_BASE_URL,
+    model: env.MODEL_NAME
+  });
+
+  return {
+    ok: false,
+    reason: "http_error",
+    status: resp.status
+  };
+}
 
     const choice = data?.choices?.[0];
     const finish = choice?.finish_reason;

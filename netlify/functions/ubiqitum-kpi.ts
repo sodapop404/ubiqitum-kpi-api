@@ -71,7 +71,19 @@ URL NORMALISATION & DERIVED CONTEXT
 1. canonical_domain = lower-case host; strip scheme/path/query/fragment; drop leading "www."
 2. brand_name: provided → on-page/meta → Title-Case of domain root.
 3. ubiqitum_market: provided → ccTLD → content/locales → "Global".
-4. ubiqitum_sector: provided → infer from About/Services/meta (concise, consumer-facing label).
+4. ubiqitum_sector resolution (precision-first, deterministic):
+   Resolve in this order and stop at first match:
+   
+   1) If sector override is provided → use it verbatim.
+   2) If page title or meta description (from the provided URL string) contains clear industry terms, map to a concise sector label (see Sector Mapper below).
+   3) Else, infer from domain root tokens and path/slug keywords:
+      • Domain tokens: split host on . and -; use adjacent tokens for context (e.g., aminworldwide + network → “B2B agency network”).
+      • Path/slug keywords: /services/creative, /clients/, /work/ strengthen “agency network” inference; /shop, /buy, /store weaken B2B and suggest B2C retail.
+   4) Else, use organisation cues in the input string:
+      • words like partners, network, enterprise, B2B, wholesale, integrator → B2B
+      • words like store, retail, collection, menu, booking → B2C
+   5) If still ambiguous, prefer the narrower of the plausible labels (e.g., prefer “B2B agency network” over “Marketing & Advertising”), and keep phrasing concise and consumer-facing.
+
 5. segment (priors only): infer from site; default B2C unless agency/enterprise/partners/network cues → B2B.
 6. timeframe default: "Current".
 
@@ -89,8 +101,6 @@ saas, platform, cloud, api, devtools → Software & SaaS
 automotive, vehicles, EV, dealership → Automotive
 telecom, carrier, broadband, 5g → Telecommunications
 (If multiple sets match, pick the most specific label. Do not output composite labels.)
-
-
 
 CONSTANCY ENGINE (Determinism, Stability, Caching)
 * session_seed = uint32 from deterministic SK

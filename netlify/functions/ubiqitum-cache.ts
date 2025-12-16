@@ -43,49 +43,6 @@ function buildSK(args: {
   return sha256(parts.join("|"));
 }
 
-/**
- * Accepts numbers OR numeric strings.
- * Rejects null / undefined / NaN / non-numeric values.
- */
-function isValidKpiPayload(payload: any): boolean {
-  if (!payload || typeof payload !== "object") return false;
-
-  const requiredFields = [
-    "brand_relevance_percent",
-    "brand_awareness_percent",
-    "sector_relevance_avg_percent",
-    "sector_awareness_avg_percent"
-  ];
-
-  return requiredFields.every((key) => {
-    const v = payload[key];
-    if (v === null || v === undefined) return false;
-
-    const n = typeof v === "number" ? v : Number(v);
-    return Number.isFinite(n);
-  });
-}
-
-/**
- * Normalises KPI fields to numbers so cached data is consistent.
- */
-function normaliseKpiPayload(payload: any) {
-  const fields = [
-    "brand_relevance_percent",
-    "brand_awareness_percent",
-    "sector_relevance_avg_percent",
-    "sector_awareness_avg_percent"
-  ];
-
-  for (const f of fields) {
-    if (payload[f] !== undefined && payload[f] !== null) {
-      payload[f] = Number(payload[f]);
-    }
-  }
-
-  return payload;
-}
-
 // ------------------------------------------------------------------
 // Handler
 // ------------------------------------------------------------------
@@ -121,7 +78,7 @@ export const handler: Handler = async (event) => {
     }
 
     // --------------------------------------------------------------
-    // Cache key + options
+    // Cache key
     // --------------------------------------------------------------
     const sk = buildSK(body);
     const windowDays = Number(body.consistency_window_days ?? 180);
@@ -134,21 +91,13 @@ export const handler: Handler = async (event) => {
       meta: any;
     }>(redisKey);
 
-    // --------------------------------------------------------------
-    // Cache HIT evaluation
-    // --------------------------------------------------------------
     if (cached && mode === "pinned") {
       const last = new Date(cached.meta.last_refreshed_at || nowIso);
       const ageDays =
         (Date.now() - last.getTime()) / 86400000;
 
-      const withinWindow =
-        ageDays <= (cached.meta.consistency_window_days ?? windowDays);
-
-      const payloadValid = isValidKpiPayload(cached.payload);
-
-      if (withinWindow && payloadValid) {
-        console.log("🟢 Cache HIT (valid):", sk);
+      if (ageDays <= (cached.meta.consistency_window_days ?? windowDays)) {
+        console.log("🟢 Cache HIT:", sk);
         return {
           statusCode: 200,
           headers: {
@@ -160,21 +109,17 @@ export const handler: Handler = async (event) => {
           body: JSON.stringify(cached.payload)
         };
       }
-
-      console.warn(
-        payloadValid
-          ? "🟠 Cache STALE — refreshing:"
-          : "🟠 Cache INVALID (null / non-numeric KPI) — refreshing:",
-        sk
-      );
     }
 
     console.log("🟡 Cache MISS — invoking KPI function");
 
     // --------------------------------------------------------------
-    // Call KPI function
+    // CALL KPI FUNCTION **VIA HTTP**
     // --------------------------------------------------------------
-    const kpiUrl = `${process.env.URL}/.netlify/functions/ubiqitum-kpi`;
+    const kpiUrl =
+      `${process.env.URL}/.netlify/functions/ubiqitum-kpi`;
+
+    console.log("➡️ Calling KPI:", kpiUrl);
 
     const kpiRes = await fetch(kpiUrl, {
       method: "POST",
@@ -202,20 +147,6 @@ export const handler: Handler = async (event) => {
       console.error("❌ KPI response not valid JSON");
       throw err;
     }
-
-    // --------------------------------------------------------------
-    // Validate + normalise KPI payload
-    // --------------------------------------------------------------
-    if (!isValidKpiPayload(payload)) {
-      console.error("❌ KPI returned invalid payload — not caching");
-      return {
-        statusCode: 502,
-        headers: CORS_HEADERS,
-        body: "KPI returned incomplete data"
-      };
-    }
-
-    payload = normaliseKpiPayload(payload);
 
     // --------------------------------------------------------------
     // Cache store

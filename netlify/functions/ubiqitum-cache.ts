@@ -6,6 +6,14 @@ import { Redis } from "@upstash/redis";
 const redis = Redis.fromEnv();
 
 // ------------------------------------------------------------------
+// Logging helper (flush stdout immediately)
+// ------------------------------------------------------------------
+function logFlush(...args: any[]) {
+  console.log(...args);
+  process.stdout.write(""); // forces Netlify to flush logs immediately
+}
+
+// ------------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------------
 function canonicalDomain(u: string) {
@@ -60,7 +68,6 @@ function isValidKpiPayload(payload: any): boolean {
     return Number.isFinite(n);
   }).length;
 
-  // Require at least 3 of 4 metrics
   return validCount >= 3;
 }
 
@@ -91,19 +98,22 @@ export const handler: Handler = async (event) => {
     "Access-Control-Allow-Methods": "POST, OPTIONS"
   };
 
-  console.log("🔥 ubiqitum-cache invoked", { method: event.httpMethod });
+  logFlush("🔥 ubiqitum-cache invoked", { method: event.httpMethod, body: event.body });
 
   if (event.httpMethod === "OPTIONS") {
+    logFlush("Returning 204 OPTIONS");
     return { statusCode: 204, headers: CORS_HEADERS };
   }
 
   if (event.httpMethod !== "POST") {
+    logFlush("Returning 405 non-POST");
     return { statusCode: 405, headers: CORS_HEADERS, body: "POST only" };
   }
 
   try {
     const body = JSON.parse(event.body || "{}");
     if (!body.brand_url) {
+      logFlush("Missing brand_url");
       return { statusCode: 400, headers: CORS_HEADERS, body: "brand_url required" };
     }
 
@@ -137,47 +147,34 @@ export const handler: Handler = async (event) => {
         cacheStatus = "invalid";
       }
 
-      // Degraded cache: serve anyway without KPI
       if (withinWindow && !payloadValid) {
         cacheStatus = "degraded";
-        console.log("🟠 Cache degraded", {
-          sk,
-          cacheStatus,
-          withinWindow,
-          payloadValid,
-          cachedValues: cached.payload
-        });
+        logFlush("🟠 Cache degraded", { sk, cacheStatus, cachedValues: cached.payload });
         return {
           statusCode: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "X-Cache-Status": cacheStatus,
-            ...CORS_HEADERS
-          },
+          headers: { "Content-Type": "application/json", "X-Cache-Status": cacheStatus, ...CORS_HEADERS },
           body: JSON.stringify({ ...cached.payload, cache_status: cacheStatus })
         };
       }
 
       if (cacheStatus === "hit") {
-        console.log("🟢 Cache HIT", { sk, cacheStatus, cachedValues: cached.payload });
+        logFlush("🟢 Cache HIT", { sk, cacheStatus, cachedValues: cached.payload });
         return {
           statusCode: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "X-Cache-Status": cacheStatus,
-            ...CORS_HEADERS
-          },
+          headers: { "Content-Type": "application/json", "X-Cache-Status": cacheStatus, ...CORS_HEADERS },
           body: JSON.stringify({ ...cached.payload, cache_status: cacheStatus })
         };
       }
 
-      console.log("🟡 Cache requires KPI refresh", { sk, cacheStatus });
+      logFlush("🟡 Cache requires KPI refresh", { sk, cacheStatus });
+    } else {
+      logFlush("Cache MISS", { sk });
     }
 
     // --------------------------------------------------------------
     // KPI invocation
     // --------------------------------------------------------------
-    console.log("➡️ Invoking KPI", { sk, cacheStatus });
+    logFlush("➡️ Invoking KPI", { sk, cacheStatus });
     const kpiUrl = `${process.env.URL}/.netlify/functions/ubiqitum-kpi`;
     const kpiRes = await fetch(kpiUrl, {
       method: "POST",
@@ -190,52 +187,33 @@ export const handler: Handler = async (event) => {
     try {
       payload = JSON.parse(rawText);
     } catch {
-      console.error("❌ KPI response not valid JSON", { sk, rawText });
+      logFlush("❌ KPI response not valid JSON", { sk, rawText });
       throw new Error("Invalid JSON from KPI");
     }
 
     const valid = isValidKpiPayload(payload);
     if (!valid) {
-      console.error("❌ KPI returned invalid payload", { sk, payload });
-      return {
-        statusCode: 502,
-        headers: CORS_HEADERS,
-        body: "KPI returned invalid payload"
-      };
+      logFlush("❌ KPI returned invalid payload", { sk, payload });
+      return { statusCode: 502, headers: CORS_HEADERS, body: "KPI returned invalid payload" };
     }
 
     normaliseKpiPayload(payload);
 
     await redis.set(
       redisKey,
-      {
-        payload,
-        meta: {
-          sk,
-          last_refreshed_at: nowIso,
-          consistency_window_days: windowDays
-        }
-      },
+      { payload, meta: { sk, last_refreshed_at: nowIso, consistency_window_days: windowDays } },
       { ex: windowDays * 86400 }
     );
 
-    console.log("🟢 KPI completed & cached", { sk, cacheStatus });
+    logFlush("🟢 KPI completed & cached", { sk, cacheStatus, payload });
 
     return {
       statusCode: 200,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Cache-Status": cacheStatus === "miss" ? "miss" : cacheStatus,
-        ...CORS_HEADERS
-      },
+      headers: { "Content-Type": "application/json", "X-Cache-Status": cacheStatus === "miss" ? "miss" : cacheStatus, ...CORS_HEADERS },
       body: JSON.stringify({ ...payload, cache_status: cacheStatus === "miss" ? "miss" : cacheStatus })
     };
   } catch (err) {
-    console.error("🔥 ubiqitum-cache fatal error", err);
-    return {
-      statusCode: 500,
-      headers: CORS_HEADERS,
-      body: "Internal cache error"
-    };
+    logFlush("🔥 ubiqitum-cache fatal error", err);
+    return { statusCode: 500, headers: CORS_HEADERS, body: "Internal cache error" };
   }
 };

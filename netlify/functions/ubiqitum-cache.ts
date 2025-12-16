@@ -43,6 +43,28 @@ function buildSK(args: {
   return sha256(parts.join("|"));
 }
 
+/**
+ * Determines whether the KPI payload is usable.
+ * Any null / undefined / NaN values force a refresh.
+ */
+function isValidKpiPayload(payload: any): boolean {
+  if (!payload || typeof payload !== "object") return false;
+
+  const requiredFields = [
+    "brand_relevance_percent",
+    "brand_awareness_percent",
+    "sector_relevance_avg_percent",
+    "sector_awareness_avg_percent"
+  ];
+
+  return requiredFields.every(
+    (key) =>
+      payload[key] !== null &&
+      payload[key] !== undefined &&
+      Number.isFinite(payload[key])
+  );
+}
+
 // ------------------------------------------------------------------
 // Handler
 // ------------------------------------------------------------------
@@ -78,7 +100,7 @@ export const handler: Handler = async (event) => {
     }
 
     // --------------------------------------------------------------
-    // Cache key
+    // Cache key + options
     // --------------------------------------------------------------
     const sk = buildSK(body);
     const windowDays = Number(body.consistency_window_days ?? 180);
@@ -91,13 +113,21 @@ export const handler: Handler = async (event) => {
       meta: any;
     }>(redisKey);
 
+    // --------------------------------------------------------------
+    // Cache HIT evaluation
+    // --------------------------------------------------------------
     if (cached && mode === "pinned") {
       const last = new Date(cached.meta.last_refreshed_at || nowIso);
       const ageDays =
         (Date.now() - last.getTime()) / 86400000;
 
-      if (ageDays <= (cached.meta.consistency_window_days ?? windowDays)) {
-        console.log("🟢 Cache HIT:", sk);
+      const withinWindow =
+        ageDays <= (cached.meta.consistency_window_days ?? windowDays);
+
+      const payloadValid = isValidKpiPayload(cached.payload);
+
+      if (withinWindow && payloadValid) {
+        console.log("🟢 Cache HIT (valid):", sk);
         return {
           statusCode: 200,
           headers: {
@@ -109,17 +139,20 @@ export const handler: Handler = async (event) => {
           body: JSON.stringify(cached.payload)
         };
       }
+
+      if (!payloadValid) {
+        console.warn("🟠 Cache INVALID (null KPI values) — refreshing:", sk);
+      } else {
+        console.warn("🟠 Cache STALE — refreshing:", sk);
+      }
     }
 
     console.log("🟡 Cache MISS — invoking KPI function");
 
     // --------------------------------------------------------------
-    // CALL KPI FUNCTION **VIA HTTP**
+    // Call KPI function
     // --------------------------------------------------------------
-    const kpiUrl =
-      `${process.env.URL}/.netlify/functions/ubiqitum-kpi`;
-
-    console.log("➡️ Calling KPI:", kpiUrl);
+    const kpiUrl = `${process.env.URL}/.netlify/functions/ubiqitum-kpi`;
 
     const kpiRes = await fetch(kpiUrl, {
       method: "POST",
@@ -146,6 +179,18 @@ export const handler: Handler = async (event) => {
     } catch (err) {
       console.error("❌ KPI response not valid JSON");
       throw err;
+    }
+
+    // --------------------------------------------------------------
+    // Validate KPI response BEFORE caching
+    // --------------------------------------------------------------
+    if (!isValidKpiPayload(payload)) {
+      console.error("❌ KPI returned invalid / incomplete payload — not caching");
+      return {
+        statusCode: 502,
+        headers: CORS_HEADERS,
+        body: "KPI returned incomplete data"
+      };
     }
 
     // --------------------------------------------------------------
@@ -187,4 +232,3 @@ export const handler: Handler = async (event) => {
     };
   }
 };
-

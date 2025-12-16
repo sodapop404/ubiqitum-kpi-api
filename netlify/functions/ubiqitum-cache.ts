@@ -6,7 +6,7 @@ import { Redis } from "@upstash/redis";
 const redis = Redis.fromEnv();
 
 // --------------------------------------------------
-// Logging (Netlify-safe flush)
+// Logging (Netlify-safe)
 // --------------------------------------------------
 function log(...args: any[]) {
   console.log(...args);
@@ -42,7 +42,7 @@ function buildSK(args: any) {
 }
 
 // --------------------------------------------------
-// KPI validation (normalized_output only, relaxed)
+// KPI validation (CORRECT TARGET)
 // --------------------------------------------------
 function isValidKpiPayload(payload: any): boolean {
   if (!payload || typeof payload !== "object") return false;
@@ -54,12 +54,10 @@ function isValidKpiPayload(payload: any): boolean {
     "sector_awareness_avg_percent"
   ];
 
-  const validCount = fields.filter((key) => {
-    const v = payload[key];
+  return fields.filter((k) => {
+    const v = payload[k];
     return Number.isFinite(typeof v === "number" ? v : Number(v));
-  }).length;
-
-  return validCount >= 1; // relaxed: only 1 valid numeric field required
+  }).length >= 3;
 }
 
 function normaliseKpiPayload(payload: any) {
@@ -100,32 +98,32 @@ export const handler: Handler = async (event) => {
 
     const sk = buildSK(body);
     const redisKey = `ubiqitum:sk:${sk}`;
-    const windowDays = 1; // 24-hour cache
+    const windowDays = Number(body.consistency_window_days ?? 1);
     const nowIso = new Date().toISOString();
 
     const cached = await redis.get<any>(redisKey);
+
     let cache_status: "hit" | "stale" | "invalid" | "degraded" | "miss" = "miss";
 
     // --------------------------------------------------
-    // Cache evaluation (normalized_output only)
+    // Cache evaluation
     // --------------------------------------------------
-    if (cached?.normalized_output && cached?.meta) {
+    if (cached) {
       const ageDays =
-        (Date.now() - new Date(cached.meta.last_refreshed_at).getTime()) /
-        86400000;
+        (Date.now() - new Date(cached.meta.last_refreshed_at).getTime()) / 86400000;
+
       const withinWindow = ageDays <= cached.meta.consistency_window_days;
-      const payloadValid = isValidKpiPayload(cached.normalized_output);
+      const payloadValid = isValidKpiPayload(cached.payload);
 
       log("📦 Cache found", { sk, withinWindow, payloadValid });
 
       if (withinWindow && payloadValid) {
         cache_status = "hit";
-        log("🟢 Cache HIT (normalized_output)", sk);
-
+        log("🟢 Cache HIT", sk);
         return {
           statusCode: 200,
           headers: { ...CORS, "X-Cache-Status": cache_status },
-          body: JSON.stringify({ ...cached.normalized_output, cache_status })
+          body: JSON.stringify({ ...cached.payload, cache_status })
         };
       }
 
@@ -150,19 +148,18 @@ export const handler: Handler = async (event) => {
       const text = await kpiRes.text();
       const raw = JSON.parse(text);
 
-      const normalized =
-        normaliseKpiPayload(raw.normalized_output ?? raw);
+      const kpiPayload = normaliseKpiPayload(
+        raw.normalized_output ?? raw
+      );
 
-      if (!isValidKpiPayload(normalized)) {
+      if (!isValidKpiPayload(kpiPayload)) {
         throw new Error("KPI returned invalid payload");
       }
 
       await redis.set(
         redisKey,
         {
-          input_payload: body,
-          ai_raw_response: raw,
-          normalized_output: normalized,
+          payload: kpiPayload,
           meta: {
             sk,
             last_refreshed_at: nowIso,
@@ -177,29 +174,23 @@ export const handler: Handler = async (event) => {
       return {
         statusCode: 200,
         headers: { ...CORS, "X-Cache-Status": cache_status },
-        body: JSON.stringify({ ...normalized, cache_status })
+        body: JSON.stringify({ ...kpiPayload, cache_status })
       };
 
     } catch (kpiErr) {
       log("❌ KPI failed", kpiErr);
 
-      // --------------------------------------------------
-      // Degraded fallback (always)
-      // --------------------------------------------------
-      cache_status = "degraded";
-      log("🟠 Returning degraded cache (normalized_output or placeholder)", sk);
+      if (cached?.payload) {
+        cache_status = "degraded";
+        log("🟠 Returning degraded cache", sk);
+        return {
+          statusCode: 200,
+          headers: { ...CORS, "X-Cache-Status": cache_status },
+          body: JSON.stringify({ ...cached.payload, cache_status })
+        };
+      }
 
-      return {
-        statusCode: 200,
-        headers: { ...CORS, "X-Cache-Status": cache_status },
-        body: JSON.stringify({
-          brand_relevance_percent: cached?.normalized_output?.brand_relevance_percent ?? null,
-          brand_awareness_percent: cached?.normalized_output?.brand_awareness_percent ?? null,
-          sector_relevance_avg_percent: cached?.normalized_output?.sector_relevance_avg_percent ?? null,
-          sector_awareness_avg_percent: cached?.normalized_output?.sector_awareness_avg_percent ?? null,
-          cache_status
-        })
-      };
+      throw kpiErr;
     }
 
   } catch (err) {

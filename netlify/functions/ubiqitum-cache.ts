@@ -26,6 +26,18 @@ function sha256(s: string) {
   return crypto.createHash("sha256").update(s, "utf8").digest("hex");
 }
 
+function normaliseInputUrl(raw){
+  if (!raw || typeof raw !== "string") return "";
+  raw = raw.trim();
+  // Add https:// if no scheme 
+  if (!/^https?:\/\//i.test(raw)) raw = "https://" + raw;
+  try { const u = new URL(raw);
+       // Lowercase host; leave path/query as-is 
+       u.hostname = u.hostname.toLowerCase();
+       return u.href;
+      } catch { return ""; } 
+}
+
 function buildSK(args: any) {
   const parts = [
     canonicalDomain(args.brand_url),
@@ -95,6 +107,13 @@ export const handler: Handler = async (event) => {
     if (!body.brand_url) {
       return { statusCode: 400, headers: CORS, body: "brand_url required" };
     }
+
+    // Normalize the brand_url
+body.brand_url = normaliseInputUrl(body.brand_url);
+
+if (!body.brand_url) {
+  return { statusCode: 400, headers: CORS, body: "Invalid brand_url" };
+}
 
     const sk = buildSK(body);
     const redisKey = `ubiqitum:sk:${sk}`;

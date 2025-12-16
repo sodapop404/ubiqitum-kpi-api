@@ -75,6 +75,23 @@ URL NORMALISATION & DERIVED CONTEXT
 5. segment (priors only): infer from site; default B2C unless agency/enterprise/partners/network cues → B2B.
 6. timeframe default: "Current".
 
+SECTOR MAPPER (keyword-to-label map; choose the closest single label):
+agency, creative, brand strategy, media, network, partners, worldwide → B2B agency network
+consumer electronics, devices, smartphone, laptop, wearable → Consumer technology
+beverage, soft drink, cola, juice, bottling → Non-alcoholic beverages
+bank, credit, lending, deposit, fintech → Financial services
+university, institute, campus, research → Higher education
+hospital, clinic, health, pharma, medtech → Healthcare
+retail, shop, store, e-commerce, checkout → Retail & e-commerce
+logistics, freight, shipping, warehousing → Logistics & supply chain
+construction, engineering, civil, equipment → Construction & infrastructure
+saas, platform, cloud, api, devtools → Software & SaaS
+automotive, vehicles, EV, dealership → Automotive
+telecom, carrier, broadband, 5g → Telecommunications
+(If multiple sets match, pick the most specific label. Do not output composite labels.)
+
+
+
 CONSTANCY ENGINE (Determinism, Stability, Caching)
 * session_seed = uint32 from deterministic SK
 * Use session_seed for tie-breakers and ±0.01 adjustment to avoid *.00/*.50

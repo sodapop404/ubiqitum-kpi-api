@@ -22,9 +22,7 @@ const CORS_HEADERS = {
 function normaliseInputUrl(raw: string): string {
   if (!raw || typeof raw !== "string") return "";
   raw = raw.trim();
-
   if (!/^https?:\/\//i.test(raw)) raw = "https://" + raw;
-
   try {
     const u = new URL(raw);
     u.hostname = u.hostname.toLowerCase();
@@ -35,7 +33,7 @@ function normaliseInputUrl(raw: string): string {
 }
 
 /* ====================================================================
-   MODEL REQUEST (STRICT JSON, TRUNCATION SAFE)
+   MODEL REQUEST (STRICT JSON, TRUNCATION SAFE, NESTED JSON HANDLING)
 ==================================================================== */
 async function modelRequest(
   env: any,
@@ -43,10 +41,7 @@ async function modelRequest(
   opts: { maxTokens: number; timeoutMs: number }
 ) {
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort("timeout"),
-    Math.min(opts.timeoutMs, 60000)
-  );
+  const timer = setTimeout(() => controller.abort("timeout"), Math.min(opts.timeoutMs, 60000));
 
   try {
     const resp = await fetch(env.MODEL_BASE_URL, {
@@ -65,46 +60,54 @@ async function modelRequest(
       signal: controller.signal,
     });
 
-    const data = await resp.json().catch(() => ({}));
+    let data: any = {};
+    try { data = await resp.json(); } catch {}
 
     if (!resp.ok) {
       const errorText = await resp.text().catch(() => "");
       console.error("[KPI][MODEL_HTTP_ERROR]", {
         status: resp.status,
-        body: errorText || data,
+        body: errorText,
         url: env.MODEL_BASE_URL,
-        model: env.MODEL_NAME,
+        model: env.MODEL_NAME
       });
-
-      return {
-        ok: false,
-        reason: "http_error",
-        status: resp.status,
-        raw: data,
-      };
+      return { ok: false, reason: "http_error", status: resp.status };
     }
 
     const choice = data?.choices?.[0];
     const finish = choice?.finish_reason;
-    const text = choice?.message?.content;
+    let text = choice?.message?.content ?? "";
 
-    if (!text || finish !== "stop") {
-      return { ok: false, reason: "truncated", raw: data };
-    }
+    if (!text || finish !== "stop") return { ok: false, reason: "truncated" };
 
-    let json;
+    // ======================================================
+    // NESTED JSON EXTRACTION
+    // ======================================================
+    // 1. Strip Markdown ```json blocks
+    text = text.replace(/```json([\s\S]*?)```/gi, "$1").trim();
+    // 2. Strip any other ``` blocks
+    text = text.replace(/```([\s\S]*?)```/gi, "$1").trim();
+    // 3. Try to parse JSON (top-level)
+    let json: any;
     try {
       json = JSON.parse(text);
     } catch {
-      return { ok: false, reason: "truncated", raw: data };
+      // If top-level fails, try to extract JSON-looking substring
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { json = JSON.parse(match[0]); } catch { }
+      }
     }
 
-    return { ok: true, json, raw: data };
+    if (!json) return { ok: false, reason: "truncated" };
+
+    // LOG THE RAW MESSAGE FOR DEBUGGING
+    log("[KPI][MODEL_RAW]", { raw_message: text, used_max_tokens: opts.maxTokens, used_phase: "primary" });
+
+    return { ok: true, json };
   } catch (err: any) {
-    if (err?.name === "AbortError") {
-      return { ok: false, reason: "timeout", raw: null };
-    }
-    return { ok: false, reason: "network", err, raw: null };
+    if (err?.name === "AbortError") return { ok: false, reason: "timeout" };
+    return { ok: false, reason: "network", err };
   } finally {
     clearTimeout(timer);
   }
@@ -153,7 +156,7 @@ function normalise(json: any, seed: number) {
 }
 
 /* ====================================================================
-   FULL SYSTEM PROMPT (VERBATIM — NO MODIFICATIONS)
+   FULL SYSTEM PROMPT (VERBATIM)
 ==================================================================== */
 const SYSTEM_PROMPT = `MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 
@@ -277,33 +280,18 @@ ubiqitum_overallagainastallcompany_score
 export const handler: Handler = async (event) => {
   log("🔥 Invoked", event.httpMethod);
 
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers: CORS_HEADERS, body: "" };
-  }
-
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, headers: CORS_HEADERS, body: "POST only" };
-  }
+  if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: CORS_HEADERS, body: "" };
+  if (event.httpMethod !== "POST") return { statusCode: 405, headers: CORS_HEADERS, body: "POST only" };
 
   let body: any = {};
-  try {
-    body = JSON.parse(event.body || "{}");
-  } catch {
-    return {
-      statusCode: 400,
-      headers: CORS_HEADERS,
-      body: JSON.stringify({ error: "Invalid JSON" }),
-    };
+  try { body = JSON.parse(event.body || "{}"); } catch {
+    return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: "Invalid JSON" }) };
   }
 
   body.brand_url = normaliseInputUrl(body.brand_url);
   if (!body.brand_url) {
     log("❌ Invalid brand_url");
-    return {
-      statusCode: 400,
-      headers: CORS_HEADERS,
-      body: JSON.stringify({ error: "Invalid brand_url" }),
-    };
+    return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: "Invalid brand_url" }) };
   }
 
   log("🌐 brand_url", body.brand_url);
@@ -324,44 +312,25 @@ export const handler: Handler = async (event) => {
   ];
 
   let result: any = null;
-  let usedMax = "unknown";
-  let usedPhase = "primary";
-
   for (const a of attempts) {
     log("🧠 Model attempt", a.maxTokens);
-    usedMax = a.maxTokens.toString();
     result = await modelRequest(process.env, messages, a);
     if (result.ok) break;
-    if (result.reason === "exceeds_limit") {
-      usedPhase = "fallback";
-      for (const f of fallbacks) {
-        log("🧠 Fallback attempt", f.maxTokens);
-        usedMax = f.maxTokens.toString();
-        result = await modelRequest(process.env, messages, f);
-        if (result.ok) break;
-      }
-      break;
+    if (result.reason === "exceeds_limit") break;
+  }
+
+  if (!result?.ok && result?.reason === "exceeds_limit") {
+    for (const f of fallbacks) {
+      log("🧠 Fallback", f.maxTokens);
+      result = await modelRequest(process.env, messages, f);
+      if (result.ok) break;
     }
   }
 
   if (!result?.ok) {
-    log("❌ KPI failed", result?.reason, {
-      raw: result?.raw ?? null,
-    });
-    return {
-      statusCode: 502,
-      headers: CORS_HEADERS,
-      body: JSON.stringify({ error: "KPI failed", reason: result?.reason }),
-    };
+    log("❌ KPI failed", result?.reason);
+    return { statusCode: 502, headers: CORS_HEADERS, body: JSON.stringify({ error: "KPI failed", reason: result?.reason }) };
   }
-
-  // Log full raw model message for debugging
-  log("[KPI][MODEL_RAW]", {
-    brand_url: body.brand_url,
-    used_max_tokens: usedMax,
-    used_phase: usedPhase,
-    raw_message: result.raw?.choices?.[0]?.message?.content || "no raw content",
-  });
 
   const seed = Number.isInteger(body.seed) ? body.seed : 0;
   const output = normalise(result.json, seed);
@@ -371,14 +340,6 @@ export const handler: Handler = async (event) => {
   return {
     statusCode: 200,
     headers: { "Content-Type": "application/json", ...CORS_HEADERS },
-    body: JSON.stringify(
-      {
-        input_payload: body,
-        ai_raw_response: result.raw,
-        normalized_output: output,
-      },
-      null,
-      2
-    ),
+    body: JSON.stringify({ input_payload: body, normalized_output: output }, null, 2),
   };
 };

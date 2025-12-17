@@ -348,6 +348,14 @@ export const handler: Handler = async (event) => {
     };
   }
 
+   // --- DEBUG: print full raw LLM message ---
+log("[KPI][MODEL_RAW]", {
+  brand_url: body.brand_url,
+  used_max_tokens: result.usedMax || "unknown",
+  used_phase: result.usedPhase || "primary",
+  raw_message: result.raw || "no raw content",
+});
+
   const seed = Number.isInteger(body.seed) ? body.seed : 0;
   const output = normalise(result.json, seed);
 

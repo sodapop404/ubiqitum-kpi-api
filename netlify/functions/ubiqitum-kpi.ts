@@ -22,7 +22,9 @@ const CORS_HEADERS = {
 function normaliseInputUrl(raw: string): string {
   if (!raw || typeof raw !== "string") return "";
   raw = raw.trim();
+
   if (!/^https?:\/\//i.test(raw)) raw = "https://" + raw;
+
   try {
     const u = new URL(raw);
     u.hostname = u.hostname.toLowerCase();
@@ -30,29 +32,6 @@ function normaliseInputUrl(raw: string): string {
   } catch {
     return "";
   }
-}
-
-/* ====================================================================
-   RECURSIVE JSON EXTRACTION
-==================================================================== */
-function extractJsonRecursive(str: string): any | null {
-  if (!str) return null;
-
-  // Remove Markdown code blocks
-  str = str.replace(/```json([\s\S]*?)```/gi, "$1")
-           .replace(/```([\s\S]*?)```/gi, "$1")
-           .trim();
-
-  // Attempt top-level parse
-  try { return JSON.parse(str); } catch {}
-
-  // Attempt to find any { ... } substring
-  const match = str.match(/\{[\s\S]*\}/);
-  if (match) {
-    try { return JSON.parse(match[0]); } catch {}
-  }
-
-  return null;
 }
 
 /* ====================================================================
@@ -94,28 +73,39 @@ async function modelRequest(
         status: resp.status,
         body: errorText,
         url: env.MODEL_BASE_URL,
-        model: env.MODEL_NAME
+        model: env.MODEL_NAME,
       });
-      return { ok: false, reason: "http_error", status: resp.status };
+
+      return {
+        ok: false,
+        reason: "http_error",
+        status: resp.status,
+      };
     }
 
     const choice = data?.choices?.[0];
     const finish = choice?.finish_reason;
-    const text = choice?.message?.content ?? "";
+    const text = choice?.message?.content;
 
-    // Extract JSON recursively
-    const json = extractJsonRecursive(text);
+    if (!text || finish !== "stop") {
+      return { ok: false, reason: "truncated" };
+    }
 
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return { ok: false, reason: "truncated" };
+    }
+
+    // Log the full raw message for debugging
     log("[KPI][MODEL_RAW]", {
+      brand_url: messages[messages.length - 1]?.content,
       raw_message: text,
       used_max_tokens: opts.maxTokens,
       used_phase: "primary",
-      extracted_json: json
+      extracted_json: json,
     });
-
-    if (!json || finish !== "stop") {
-      return { ok: false, reason: "truncated" };
-    }
 
     return { ok: true, json };
   } catch (err: any) {
@@ -364,6 +354,28 @@ export const handler: Handler = async (event) => {
       statusCode: 502,
       headers: CORS_HEADERS,
       body: JSON.stringify({ error: "KPI failed", reason: result?.reason }),
+    };
+  }
+
+  // Check if all numeric KPI fields are null
+  const allMetricsNull = REQUIRED_KEYS
+    .slice(4) // numeric fields start at index 4
+    .every((k) => result.json[k] === null);
+
+  if (allMetricsNull) {
+    log("⚠️ KPI metrics all null – skipping normalization/cache", result.json.canonical_domain);
+    return {
+      statusCode: 200,
+      headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+      body: JSON.stringify(
+        {
+          input_payload: body,
+          normalized_output: null,
+          note: "All numeric KPI fields are null; not cached"
+        },
+        null,
+        2
+      ),
     };
   }
 

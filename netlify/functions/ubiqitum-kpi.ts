@@ -67,43 +67,44 @@ async function modelRequest(
 
     const data = await resp.json().catch(() => ({}));
 
-if (!resp.ok) {
-  const errorText = await resp.text().catch(() => "");
-  console.error("[KPI][MODEL_HTTP_ERROR]", {
-    status: resp.status,
-    body: errorText,
-    url: env.MODEL_BASE_URL,
-    model: env.MODEL_NAME
-  });
+    if (!resp.ok) {
+      const errorText = await resp.text().catch(() => "");
+      console.error("[KPI][MODEL_HTTP_ERROR]", {
+        status: resp.status,
+        body: errorText || data,
+        url: env.MODEL_BASE_URL,
+        model: env.MODEL_NAME,
+      });
 
-  return {
-    ok: false,
-    reason: "http_error",
-    status: resp.status
-  };
-}
+      return {
+        ok: false,
+        reason: "http_error",
+        status: resp.status,
+        raw: data,
+      };
+    }
 
     const choice = data?.choices?.[0];
     const finish = choice?.finish_reason;
     const text = choice?.message?.content;
 
     if (!text || finish !== "stop") {
-      return { ok: false, reason: "truncated" };
+      return { ok: false, reason: "truncated", raw: data };
     }
 
     let json;
     try {
       json = JSON.parse(text);
     } catch {
-      return { ok: false, reason: "truncated" };
+      return { ok: false, reason: "truncated", raw: data };
     }
 
-    return { ok: true, json };
+    return { ok: true, json, raw: data };
   } catch (err: any) {
     if (err?.name === "AbortError") {
-      return { ok: false, reason: "timeout" };
+      return { ok: false, reason: "timeout", raw: null };
     }
-    return { ok: false, reason: "network", err };
+    return { ok: false, reason: "network", err, raw: null };
   } finally {
     clearTimeout(timer);
   }
@@ -323,24 +324,30 @@ export const handler: Handler = async (event) => {
   ];
 
   let result: any = null;
+  let usedMax = "unknown";
+  let usedPhase = "primary";
 
   for (const a of attempts) {
     log("🧠 Model attempt", a.maxTokens);
+    usedMax = a.maxTokens.toString();
     result = await modelRequest(process.env, messages, a);
     if (result.ok) break;
-    if (result.reason === "exceeds_limit") break;
-  }
-
-  if (!result?.ok && result?.reason === "exceeds_limit") {
-    for (const f of fallbacks) {
-      log("🧠 Fallback", f.maxTokens);
-      result = await modelRequest(process.env, messages, f);
-      if (result.ok) break;
+    if (result.reason === "exceeds_limit") {
+      usedPhase = "fallback";
+      for (const f of fallbacks) {
+        log("🧠 Fallback attempt", f.maxTokens);
+        usedMax = f.maxTokens.toString();
+        result = await modelRequest(process.env, messages, f);
+        if (result.ok) break;
+      }
+      break;
     }
   }
 
   if (!result?.ok) {
-    log("❌ KPI failed", result?.reason);
+    log("❌ KPI failed", result?.reason, {
+      raw: result?.raw ?? null,
+    });
     return {
       statusCode: 502,
       headers: CORS_HEADERS,
@@ -348,13 +355,13 @@ export const handler: Handler = async (event) => {
     };
   }
 
-   // --- DEBUG: print full raw LLM message ---
-log("[KPI][MODEL_RAW]", {
-  brand_url: body.brand_url,
-  used_max_tokens: result.usedMax || "unknown",
-  used_phase: result.usedPhase || "primary",
-  raw_message: result.raw || "no raw content",
-});
+  // Log full raw model message for debugging
+  log("[KPI][MODEL_RAW]", {
+    brand_url: body.brand_url,
+    used_max_tokens: usedMax,
+    used_phase: usedPhase,
+    raw_message: result.raw?.choices?.[0]?.message?.content || "no raw content",
+  });
 
   const seed = Number.isInteger(body.seed) ? body.seed : 0;
   const output = normalise(result.json, seed);
@@ -367,6 +374,7 @@ log("[KPI][MODEL_RAW]", {
     body: JSON.stringify(
       {
         input_payload: body,
+        ai_raw_response: result.raw,
         normalized_output: output,
       },
       null,

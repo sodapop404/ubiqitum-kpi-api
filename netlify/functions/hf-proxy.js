@@ -2,11 +2,28 @@
 import fetch from "node-fetch";
 
 export async function handler(event, context) {
+  // Handle CORS preflight request
+  if (event.httpMethod === "OPTIONS") {
+    return {
+      statusCode: 200,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Methods": "POST, OPTIONS"
+      },
+      body: ""
+    };
+  }
+
   // Only allow POST
   if (event.httpMethod !== "POST") {
     return {
       statusCode: 405,
-      headers: { "Allow": "POST" },
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Methods": "POST, OPTIONS"
+      },
       body: JSON.stringify({ error: "Method Not Allowed" })
     };
   }
@@ -18,7 +35,7 @@ export async function handler(event, context) {
       return { statusCode: 400, body: JSON.stringify({ error: "brand_url required" }) };
     }
 
-    // FULL MASTER SYSTEM PROMPT — inject user URL dynamically
+    // FULL MASTER SYSTEM PROMPT — inject user URL
     const prompt = `
 MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 
@@ -159,7 +176,7 @@ Return JSON ONLY. No prose. Keys in exact order.
     const HF_MODEL = "meta-llama/Llama-3.1-8B-Instruct";
     const HF_TOKEN = "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";
 
-    const res = await fetch(`https://api-inference.huggingface.co/models/${HF_MODEL}`, {
+    const hfRes = await fetch(`https://api-inference.huggingface.co/models/${HF_MODEL}`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${HF_TOKEN}`,
@@ -171,24 +188,28 @@ Return JSON ONLY. No prose. Keys in exact order.
       })
     });
 
-    if (!res.ok) {
-      const text = await res.text();
-      return { statusCode: res.status, body: text };
-    }
-
-    const data = await res.json();
+    const data = await hfRes.json();
 
     return {
       statusCode: 200,
       headers: {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type"
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Methods": "POST, OPTIONS"
       },
       body: JSON.stringify(data)
     };
 
   } catch (err) {
     console.error(err);
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
+    return {
+      statusCode: 500,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Methods": "POST, OPTIONS"
+      },
+      body: JSON.stringify({ error: err.message })
+    };
   }
 }

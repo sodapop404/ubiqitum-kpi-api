@@ -2,6 +2,15 @@
 import fetch from "node-fetch";
 
 export async function handler(event, context) {
+  // Only allow POST
+  if (event.httpMethod !== "POST") {
+    return {
+      statusCode: 405,
+      headers: { "Allow": "POST" },
+      body: JSON.stringify({ error: "Method Not Allowed" })
+    };
+  }
+
   try {
     const body = JSON.parse(event.body || "{}");
     const brandUrl = body.brand_url;
@@ -9,7 +18,7 @@ export async function handler(event, context) {
       return { statusCode: 400, body: JSON.stringify({ error: "brand_url required" }) };
     }
 
-    // FULL MASTER SYSTEM PROMPT — inject user URL
+    // FULL MASTER SYSTEM PROMPT — inject user URL dynamically
     const prompt = `
 MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 
@@ -158,12 +167,7 @@ Return JSON ONLY. No prose. Keys in exact order.
       },
       body: JSON.stringify({
         inputs: prompt,
-        parameters: {
-          max_new_tokens: 800,
-          temperature: 0.0,
-          top_p: 1.0,
-          return_full_text: false
-        }
+        parameters: { max_new_tokens: 800, temperature: 0.0, top_p: 1.0, return_full_text: false }
       })
     });
 

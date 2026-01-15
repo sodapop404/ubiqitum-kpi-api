@@ -172,7 +172,7 @@ Return JSON ONLY. No prose. Keys in exact order.
     // Call Hugging Face Router
     // -------------------------------
     const hfResponse = await fetch(
-      "https://router.huggingface.co/models/meta-llama/Llama-3.1-8B-Instruct",
+      "https://router.huggingface.co/models/meta-llama/Llama-2-7b-chat-hf",
       {
         method: "POST",
         headers: {

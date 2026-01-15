@@ -1,13 +1,24 @@
 const fetch = require('node-fetch');
 
 export async function handler(event, context) {
+  // 1. STRICT CORS HEADERS
+  // This allows your specific Webflow staging site to communicate with Netlify
   const headers = {
-    "Access-Control-Allow-Origin": "*", 
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS"
+    "Access-Control-Allow-Origin": "https://ubiqitum-freemium.webflow.io",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Content-Type": "application/json"
   };
 
-  if (event.httpMethod === "OPTIONS") return { statusCode: 200, headers };
+  // 2. PREFLIGHT HANDLER
+  // Browser sends an OPTIONS request first; we must return 200 + headers
+  if (event.httpMethod === "OPTIONS") {
+    return {
+      statusCode: 200,
+      headers: headers,
+      body: ""
+    };
+  }
 
   try {
     const body = JSON.parse(event.body || "{}");
@@ -17,7 +28,7 @@ export async function handler(event, context) {
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({ error: "Missing brand_url in request body" })
+        body: JSON.stringify({ error: "Missing brand_url" })
       };
     }
 
@@ -152,27 +163,24 @@ OVERALL SCORE
 Return JSON ONLY. No prose. Keys in exact order.
 `;
 
-    // ---------------------------------------------------------
-    // Calling Hugging Face with proper Chat ML formatting
-    // ---------------------------------------------------------
+    // 3. CALL HUGGING FACE
     const hfResponse = await fetch(
       "https://api-inference.huggingface.co/models/meta-llama/Llama-3.1-8B-Instruct",
       {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${process.env.HF_TOKEN}`, 
+          "Authorization": `Bearer ${process.env.HF_TOKEN}`, // Securely load from Netlify Env
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          // Formatting inputs for Llama 3.1 Instruct
           inputs: `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${MASTER_PROMPT}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nbrand_url: "${brandUrl}"<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`,
           parameters: { 
             max_new_tokens: 800, 
-            temperature: 0.1, // Set slightly above 0 for model stability
+            temperature: 0.1, 
             return_full_text: false 
           },
           options: {
-            wait_for_model: true, // Forces HF to wait for model to load
+            wait_for_model: true,
             use_cache: true
           }
         })
@@ -185,20 +193,21 @@ Return JSON ONLY. No prose. Keys in exact order.
        return { statusCode: 500, headers, body: JSON.stringify(result) };
     }
 
-    // Extract text and clean off any accidental Markdown backticks
+    // Extract text and strip accidental Markdown code blocks
     let aiText = result[0].generated_text.trim();
     const cleanJson = aiText.replace(/```json|```/g, "").trim();
 
+    // 4. FINAL RESPONSE WITH CORS HEADERS
     return {
       statusCode: 200,
-      headers,
+      headers: headers,
       body: cleanJson
     };
 
   } catch (err) {
     return {
       statusCode: 500,
-      headers,
+      headers: headers,
       body: JSON.stringify({ error: err.message })
     };
   }

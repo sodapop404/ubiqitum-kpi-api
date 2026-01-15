@@ -5,12 +5,12 @@ export async function handler(event, context) {
   // CORS headers
   // -------------------------------
   const headers = {
-    "Access-Control-Allow-Origin": "*", // allow all origins; replace with your Webflow domain if desired
+    "Access-Control-Allow-Origin": "*", // replace "*" with your Webflow domain in production
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Allow-Methods": "POST, OPTIONS"
   };
 
-  // Preflight OPTIONS request
+  // Handle preflight OPTIONS request
   if (event.httpMethod === "OPTIONS") {
     return {
       statusCode: 200,
@@ -22,10 +22,11 @@ export async function handler(event, context) {
     // -------------------------------
     // Parse input
     // -------------------------------
-    const body = JSON.parse(event.body);
-    const brandUrl = body.brand_url || "";
+    const body = JSON.parse(event.body || "{}");
+    const brandUrl = body.brand_url?.trim();
 
     if (!brandUrl) {
+      console.error("Missing brand_url in request body");
       return {
         statusCode: 400,
         headers,
@@ -34,7 +35,7 @@ export async function handler(event, context) {
     }
 
     // -------------------------------
-    // Full MASTER SYSTEM PROMPT
+    // FULL MASTER SYSTEM PROMPT (verbatim)
     // -------------------------------
     const MASTER_PROMPT = `
 MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
@@ -168,27 +169,39 @@ Return JSON ONLY. No prose. Keys in exact order.
 `;
 
     // -------------------------------
-    // Call Hugging Face API
+    // Call Hugging Face Router
     // -------------------------------
-    const hfResponse = await fetch("https://router.huggingface.co/models/meta-llama/Llama-3.1-8B-Instruct", {
-      method: "POST",
-      headers: {
-        "Authorization": "Bearer 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",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        inputs: MASTER_PROMPT + `\n\nUser brand_url: "${brandUrl}"`,
-        parameters: { max_new_tokens: 800, temperature: 0.0, return_full_text: false }
-      })
-    });
+    const hfResponse = await fetch(
+      "https://router.huggingface.co/models/meta-llama/Llama-3.1-8B-Instruct",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer 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",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          inputs: MASTER_PROMPT + `\n\nUser brand_url: "${brandUrl}"`,
+          parameters: { max_new_tokens: 800, temperature: 0.0, return_full_text: false }
+        })
+      }
+    );
 
-    const text = await hfResponse.text();
-    console.log("Hugging Face raw response:", text);
+    const rawText = await hfResponse.text();
+    console.log("Hugging Face raw response:", rawText);
+
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+      console.log("Hugging Face parsed JSON:", parsed);
+    } catch (parseErr) {
+      console.error("Failed to parse Hugging Face response as JSON:", parseErr);
+      parsed = { error: "Failed to parse HF response as JSON", raw: rawText };
+    }
 
     return {
       statusCode: 200,
       headers,
-      body: text
+      body: JSON.stringify(parsed)
     };
 
   } catch (err) {
@@ -199,4 +212,4 @@ Return JSON ONLY. No prose. Keys in exact order.
       body: JSON.stringify({ error: err.message })
     };
   }
-}
+};

@@ -170,7 +170,7 @@ Return JSON ONLY. No prose. Keys in exact order.
     // -------------------------------
     // Call Hugging Face API
     // -------------------------------
-    const hfResponse = await fetch("https://api-inference.huggingface.co/models/meta-llama/Llama-3.1-8B-Instruct", {
+    const hfResponse = await fetch("https://router.huggingface.co/models/meta-llama/Llama-3.1-8B-Instruct", {
       method: "POST",
       headers: {
         "Authorization": "Bearer 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",

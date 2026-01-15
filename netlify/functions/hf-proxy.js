@@ -1,12 +1,42 @@
-// functions/hf-proxy.js
-export async function handler(event, context) {
-  try {
-    const body = JSON.parse(event.body);
-    const brand_url = body.brand_url;
-    console.log("Received brand URL:", brand_url);
+// netlify/functions/hf-proxy.js
 
-    // FULL MASTER SYSTEM PROMPT
-   const MASTER_PROMPT = `
+export async function handler(event, context) {
+  // -------------------------------
+  // CORS headers
+  // -------------------------------
+  const headers = {
+    "Access-Control-Allow-Origin": "*", // allow all origins; replace with your Webflow domain if desired
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS"
+  };
+
+  // Preflight OPTIONS request
+  if (event.httpMethod === "OPTIONS") {
+    return {
+      statusCode: 200,
+      headers
+    };
+  }
+
+  try {
+    // -------------------------------
+    // Parse input
+    // -------------------------------
+    const body = JSON.parse(event.body);
+    const brandUrl = body.brand_url || "";
+
+    if (!brandUrl) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: "Missing brand_url in request body" })
+      };
+    }
+
+    // -------------------------------
+    // Full MASTER SYSTEM PROMPT
+    // -------------------------------
+    const MASTER_PROMPT = `
 MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 
 Stable • Deterministic • URL-First • Eleven-Field Strict JSON (KPIs + Meta)
@@ -68,7 +98,6 @@ URL NORMALISATION & DERIVED CONTEXT
 3. ubiqitum_market: provided → ccTLD → content/locales → "Global".
 4. ubiqitum_sector resolution (precision-first, deterministic):
    Resolve in this order and stop at first match:
-   
    1) If sector override is provided → use it verbatim.
    2) If page title or meta description (from the provided URL string) contains clear industry terms, map to a concise sector label (see Sector Mapper below).
    3) Else, infer from domain root tokens and path/slug keywords:
@@ -95,7 +124,6 @@ construction, engineering, civil, equipment → Construction & infrastructure
 saas, platform, cloud, api, devtools → Software & SaaS
 automotive, vehicles, EV, dealership → Automotive
 telecom, carrier, broadband, 5g → Telecommunications
-(If multiple sets match, pick the most specific label. Do not output composite labels.)
 
 CONSTANCY ENGINE (Determinism, Stability, Caching)
 * session_seed = uint32 from deterministic SK
@@ -126,67 +154,49 @@ NUMBER RULES
 • Clamp to [0,100]
 • Exactly two decimals
 • NEVER end in .00 or .50 (apply deterministic ±0.01)
-
 URL NORMALISATION
 canonical_domain = lower-case host only, no scheme, path, query, fragment, or www.
-
 SCORING PRECEDENCE
 1. Direct %
 2. Counts → %
 3. Cached history
 4. Model inference
 5. Null
-
 OVERALL SCORE
 0.35*consideration + 0.30*trust + 0.20*relevance + 0.15*awareness
-
 Return JSON ONLY. No prose. Keys in exact order.
 `;
 
-    // Call HF API
-    const HF_RESPONSE = await fetch(
-      "https://api-inference.huggingface.co/models/meta-llama/Llama-3.1-8B-Instruct",
-      {
-        method: "POST",
-        headers: {
-          "Authorization": "Bearer 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",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          inputs: MASTER_PROMPT,
-          parameters: {
-            max_new_tokens: 800,
-            temperature: 0.7,
-            top_p: 0.9,
-            return_full_text: false
-          }
-        }),
-      }
-    );
+    // -------------------------------
+    // Call Hugging Face API
+    // -------------------------------
+    const hfResponse = await fetch("https://api-inference.huggingface.co/models/meta-llama/Llama-3.1-8B-Instruct", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer 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",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        inputs: MASTER_PROMPT + `\n\nUser brand_url: "${brandUrl}"`,
+        parameters: { max_new_tokens: 800, temperature: 0.0, return_full_text: false }
+      })
+    });
 
-    const rawText = await HF_RESPONSE.text();
-    console.log("HF raw response:", rawText);
-
-    let jsonResult;
-    try {
-      jsonResult = JSON.parse(rawText);
-    } catch (err) {
-      console.error("Failed to parse HF response as JSON:", err);
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: "Invalid JSON from HF", raw: rawText }),
-      };
-    }
+    const text = await hfResponse.text();
+    console.log("Hugging Face raw response:", text);
 
     return {
       statusCode: 200,
-      body: JSON.stringify(jsonResult),
+      headers,
+      body: text
     };
+
   } catch (err) {
-    console.error("HF Proxy function error:", err);
+    console.error("HF proxy error:", err);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: err.message }),
+      headers,
+      body: JSON.stringify({ error: err.message })
     };
   }
 }

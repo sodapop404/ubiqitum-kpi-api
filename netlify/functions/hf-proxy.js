@@ -1,5 +1,5 @@
 export async function handler(event, context) {
-  // 1. STRICT CORS HEADERS
+  // 1. DYNAMIC CORS HEADERS
   const headers = {
     "Access-Control-Allow-Origin": "https://ubiqitum-freemium.webflow.io",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
@@ -7,7 +7,6 @@ export async function handler(event, context) {
     "Content-Type": "application/json"
   };
 
-  // 2. PREFLIGHT HANDLER
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 200, headers, body: "" };
   }
@@ -20,11 +19,10 @@ export async function handler(event, context) {
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({ error: "Missing brand_url in request body" })
+        body: JSON.stringify({ error: "Missing brand_url" })
       };
     }
 
-    // 3. FULL MASTER SYSTEM PROMPT
     const MASTER_PROMPT = `
 MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 
@@ -156,38 +154,45 @@ OVERALL SCORE
 Return JSON ONLY. No prose. Keys in exact order.
 `;
 
-    // 4. CALL NEW HUGGING FACE ROUTER
-    const hfResponse = await fetch(
-      "https://router.huggingface.co/models/meta-llama/Llama-3.1-8B-Instruct",
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${process.env.HF_TOKEN}`,
-          "Content-Type": "application/json"
+    // 2. THE CORRECT PUBLIC INFERENCE ENDPOINT
+    const MODEL_ID = "meta-llama/Llama-3.1-8B-Instruct";
+    const API_URL = `https://api-inference.huggingface.co/models/${MODEL_ID}`;
+
+    const hfResponse = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.HF_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        // Manually wrapping the prompt in Llama 3.1 tags ensures the model 
+        // respects the System Role instruction on the standard API.
+        inputs: `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${MASTER_PROMPT}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nbrand_url: "${brandUrl}"<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`,
+        parameters: { 
+          max_new_tokens: 800, 
+          temperature: 0.1,
+          return_full_text: false 
         },
-        body: JSON.stringify({
-          model: "meta-llama/Llama-3.1-8B-Instruct",
-          messages: [
-            { role: "system", content: MASTER_PROMPT },
-            { role: "user", content: `brand_url: "${brandUrl}"` }
-          ],
-          parameters: { 
-            max_new_tokens: 800, 
-            temperature: 0.1 
-          }
-        })
-      }
-    );
+        options: {
+          wait_for_model: true,
+          use_cache: true
+        }
+      })
+    });
+
+    if (!hfResponse.ok) {
+        const errorText = await hfResponse.text();
+        return { 
+          statusCode: hfResponse.status, 
+          headers, 
+          body: JSON.stringify({ error: "HF API Error", detail: errorText }) 
+        };
+    }
 
     const result = await hfResponse.json();
 
-    if (result.error) {
-       return { statusCode: 500, headers, body: JSON.stringify(result) };
-    }
-
-    // 5. EXTRACT TEXT FROM NEW ROUTER FORMAT
-    // The Router uses 'choices' (similar to OpenAI format)
-    let aiText = result.choices[0].message.content.trim();
+    // Standard Inference API returns an array: [{ generated_text: "..." }]
+    let aiText = result[0].generated_text.trim();
     const cleanJson = aiText.replace(/```json|```/g, "").trim();
 
     return {

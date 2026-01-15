@@ -1,46 +1,12 @@
-import fetch from "node-fetch";
-
+// functions/hf-proxy.js
 export async function handler(event, context) {
-  const now = () => new Date().toISOString();
-
-  console.log(`[${now()}] Request received: ${event.httpMethod}`);
-
-  // Handle CORS preflight
-  if (event.httpMethod === "OPTIONS") {
-    return {
-      statusCode: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST, OPTIONS"
-      },
-      body: ""
-    };
-  }
-
-  if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST, OPTIONS"
-      },
-      body: JSON.stringify({ error: "Method Not Allowed" })
-    };
-  }
-
   try {
-    const body = JSON.parse(event.body || "{}");
-    const brandUrl = body.brand_url;
-    if (!brandUrl) {
-      return { statusCode: 400, body: JSON.stringify({ error: "brand_url required" }) };
-    }
+    const body = JSON.parse(event.body);
+    const brand_url = body.brand_url;
+    console.log("Received brand URL:", brand_url);
 
-    console.log(`[${now()}] brand_url received: ${brandUrl}`);
-
-    // ------------------ FULL MASTER SYSTEM PROMPT ------------------
-    const prompt = `
+    // FULL MASTER SYSTEM PROMPT
+   const MASTER_PROMPT = `
 MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 
 Stable • Deterministic • URL-First • Eleven-Field Strict JSON (KPIs + Meta)
@@ -72,7 +38,7 @@ NUMBER & FORMAT RULES
 
 INPUTS (URL-first; optional overrides)
 User will supply at least:
-* brand_url: "${brandUrl}"
+* brand_url: "<required URL>"
 
 Optional:
 * seed: <int>
@@ -102,13 +68,21 @@ URL NORMALISATION & DERIVED CONTEXT
 3. ubiqitum_market: provided → ccTLD → content/locales → "Global".
 4. ubiqitum_sector resolution (precision-first, deterministic):
    Resolve in this order and stop at first match:
+   
    1) If sector override is provided → use it verbatim.
    2) If page title or meta description (from the provided URL string) contains clear industry terms, map to a concise sector label (see Sector Mapper below).
-   3) Else, infer from domain root tokens and path/slug keywords.
-   4) Else, use organisation cues in the input string.
-   5) If still ambiguous, prefer narrower label.
+   3) Else, infer from domain root tokens and path/slug keywords:
+      • Domain tokens: split host on . and -; use adjacent tokens for context (e.g., aminworldwide + network → “B2B agency network”).
+      • Path/slug keywords: /services/creative, /clients/, /work/ strengthen “agency network” inference; /shop, /buy, /store weaken B2B and suggest B2C retail.
+   4) Else, use organisation cues in the input string:
+      • words like partners, network, enterprise, B2B, wholesale, integrator → B2B
+      • words like store, retail, collection, menu, booking → B2C
+   5) If still ambiguous, prefer the narrower of the plausible labels (e.g., prefer “B2B agency network” over “Marketing & Advertising”), and keep phrasing concise and consumer-facing.
 
-SECTOR MAPPER
+5. segment (priors only): infer from site; default B2C unless agency/enterprise/partners/network cues → B2B.
+6. timeframe default: "Current".
+
+SECTOR MAPPER (keyword-to-label map; choose the closest single label):
 agency, creative, brand strategy, media, network, partners, worldwide → B2B agency network
 consumer electronics, devices, smartphone, laptop, wearable → Consumer technology
 beverage, soft drink, cola, juice, bottling → Non-alcoholic beverages
@@ -121,17 +95,18 @@ construction, engineering, civil, equipment → Construction & infrastructure
 saas, platform, cloud, api, devtools → Software & SaaS
 automotive, vehicles, EV, dealership → Automotive
 telecom, carrier, broadband, 5g → Telecommunications
+(If multiple sets match, pick the most specific label. Do not output composite labels.)
 
-CONSTANCY ENGINE
+CONSTANCY ENGINE (Determinism, Stability, Caching)
 * session_seed = uint32 from deterministic SK
 * Use session_seed for tie-breakers and ±0.01 adjustment to avoid *.00/*.50
 
-SCORING PRECEDENCE
-1. DIRECT % PROVIDED → use
-2. COUNTS → if numerator & denominator, compute %
-3. CACHE/HISTORY → reuse SK value
-4. MODEL-INFER (default ON) → if allow_model_inference !== false, infer via priors/benchmarks
-5. NULL POLICY → if steps fail, set field to null
+SCORING PRECEDENCE (per KPI field)
+1. DIRECT % PROVIDED → use (then clamp → round → deterministic *.00/*.50 avoidance).
+2. COUNTS → if numerator & denominator, compute %.
+3. CACHE/HISTORY → reuse SK value.
+4. MODEL-INFER (default ON) → if allow_model_inference !== false, infer via priors/benchmarks.
+5. NULL POLICY → if steps fail, set field to null.
 
 OVERALL COMPOSITE
 ubiqitum_overallagainastallcompany_score =
@@ -140,7 +115,7 @@ ubiqitum_overallagainastallcompany_score =
   0.20*brand_relevance_percent +
   0.15*brand_awareness_percent
 
-FINALISATION
+FINALISATION (strict key order)
 Return a single JSON object with keys in this exact order:
 brand_name, canonical_domain, ubiqitum_market, ubiqitum_sector,
 brand_relevance_percent, sector_relevance_avg_percent,
@@ -152,53 +127,66 @@ NUMBER RULES
 • Exactly two decimals
 • NEVER end in .00 or .50 (apply deterministic ±0.01)
 
+URL NORMALISATION
+canonical_domain = lower-case host only, no scheme, path, query, fragment, or www.
+
+SCORING PRECEDENCE
+1. Direct %
+2. Counts → %
+3. Cached history
+4. Model inference
+5. Null
+
+OVERALL SCORE
+0.35*consideration + 0.30*trust + 0.20*relevance + 0.15*awareness
+
 Return JSON ONLY. No prose. Keys in exact order.
 `;
 
-    const HF_MODEL = "meta-llama/Llama-3.1-8B-Instruct";
-    const HF_TOKEN = "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";
+    // Call HF API
+    const HF_RESPONSE = await fetch(
+      "https://api-inference.huggingface.co/models/meta-llama/Llama-3.1-8B-Instruct",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer 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",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          inputs: MASTER_PROMPT,
+          parameters: {
+            max_new_tokens: 800,
+            temperature: 0.7,
+            top_p: 0.9,
+            return_full_text: false
+          }
+        }),
+      }
+    );
 
-    console.log(`[${now()}] Sending full prompt to Hugging Face...`);
-    console.log(`[${now()}] Prompt (truncated 1000 chars):\n${prompt.slice(0, 1000)}${prompt.length > 1000 ? "...[truncated]" : ""}`);
+    const rawText = await HF_RESPONSE.text();
+    console.log("HF raw response:", rawText);
 
-    const hfRes = await fetch(`https://api-inference.huggingface.co/models/${HF_MODEL}`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${HF_TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        inputs: prompt,
-        parameters: { max_new_tokens: 800, temperature: 0.0, top_p: 1.0, return_full_text: false }
-      })
-    });
-
-    console.log(`[${now()}] Hugging Face responded with status: ${hfRes.status}`);
-
-    const data = await hfRes.json();
-
-    console.log(`[${now()}] Hugging Face response (truncated 2000 chars): ${JSON.stringify(data).slice(0, 2000)}${JSON.stringify(data).length > 2000 ? "...[truncated]" : ""}`);
+    let jsonResult;
+    try {
+      jsonResult = JSON.parse(rawText);
+    } catch (err) {
+      console.error("Failed to parse HF response as JSON:", err);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: "Invalid JSON from HF", raw: rawText }),
+      };
+    }
 
     return {
       statusCode: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST, OPTIONS"
-      },
-      body: JSON.stringify(data)
+      body: JSON.stringify(jsonResult),
     };
-
   } catch (err) {
-    console.error(`[${now()}] ERROR:`, err);
+    console.error("HF Proxy function error:", err);
     return {
       statusCode: 500,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST, OPTIONS"
-      },
-      body: JSON.stringify({ error: err.message, stack: err.stack })
+      body: JSON.stringify({ error: err.message }),
     };
   }
 }

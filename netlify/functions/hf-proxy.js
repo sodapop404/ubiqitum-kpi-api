@@ -1,5 +1,4 @@
 export async function handler(event, context) {
-  // 1. DYNAMIC CORS HEADERS
   const headers = {
     "Access-Control-Allow-Origin": "https://ubiqitum-freemium.webflow.io",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
@@ -154,29 +153,25 @@ OVERALL SCORE
 Return JSON ONLY. No prose. Keys in exact order.
 `;
 
-    // 2. THE CORRECT PUBLIC INFERENCE ENDPOINT
-    const MODEL_ID = "meta-llama/Llama-3.1-8B-Instruct";
-    const API_URL = `https://api-inference.huggingface.co/models/${MODEL_ID}`;
+    // 1. USE THE V1 CHAT ROUTER URL
+    const API_URL = "https://router.huggingface.co/v1/chat/completions";
 
     const hfResponse = await fetch(API_URL, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${process.env.HF_TOKEN}`,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "x-use-cache": "true" // Optimization for the router
       },
       body: JSON.stringify({
-        // Manually wrapping the prompt in Llama 3.1 tags ensures the model 
-        // respects the System Role instruction on the standard API.
-        inputs: `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${MASTER_PROMPT}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nbrand_url: "${brandUrl}"<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`,
-        parameters: { 
-          max_new_tokens: 800, 
-          temperature: 0.1,
-          return_full_text: false 
-        },
-        options: {
-          wait_for_model: true,
-          use_cache: true
-        }
+        model: "meta-llama/Llama-3.1-8B-Instruct",
+        messages: [
+          { role: "system", content: MASTER_PROMPT },
+          { role: "user", content: `brand_url: "${brandUrl}"` }
+        ],
+        max_tokens: 800,
+        temperature: 0.1,
+        stream: false
       })
     });
 
@@ -185,14 +180,19 @@ Return JSON ONLY. No prose. Keys in exact order.
         return { 
           statusCode: hfResponse.status, 
           headers, 
-          body: JSON.stringify({ error: "HF API Error", detail: errorText }) 
+          body: JSON.stringify({ error: "Router Error", detail: errorText }) 
         };
     }
 
     const result = await hfResponse.json();
 
-    // Standard Inference API returns an array: [{ generated_text: "..." }]
-    let aiText = result[0].generated_text.trim();
+    // 2. PARSE USING OPENAI-COMPATIBLE FORMAT
+    // The router returns choices[0].message.content
+    if (!result.choices || result.choices.length === 0) {
+        throw new Error("Empty response from Hugging Face Router");
+    }
+
+    let aiText = result.choices[0].message.content.trim();
     const cleanJson = aiText.replace(/```json|```/g, "").trim();
 
     return {

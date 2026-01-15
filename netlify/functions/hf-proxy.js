@@ -1,8 +1,7 @@
-const fetch = require('node-fetch');
+// REMOVED: const fetch = require('node-fetch'); 
+// Native fetch is built into Netlify's Node runtime now.
 
 export async function handler(event, context) {
-  // 1. STRICT CORS HEADERS
-  // This allows your specific Webflow staging site to communicate with Netlify
   const headers = {
     "Access-Control-Allow-Origin": "https://ubiqitum-freemium.webflow.io",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
@@ -10,14 +9,8 @@ export async function handler(event, context) {
     "Content-Type": "application/json"
   };
 
-  // 2. PREFLIGHT HANDLER
-  // Browser sends an OPTIONS request first; we must return 200 + headers
   if (event.httpMethod === "OPTIONS") {
-    return {
-      statusCode: 200,
-      headers: headers,
-      body: ""
-    };
+    return { statusCode: 200, headers, body: "" };
   }
 
   try {
@@ -32,8 +25,7 @@ export async function handler(event, context) {
       };
     }
 
-    const MASTER_PROMPT = `
-MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
+    const MASTER_PROMPT = `MASTER SYSTEM PROMPT — Ubiqitum V3 (V5.14) KPI Engine
 
 Stable • Deterministic • URL-First • Eleven-Field Strict JSON (KPIs + Meta)
 
@@ -160,29 +152,20 @@ SCORING PRECEDENCE
 5. Null
 OVERALL SCORE
 0.35*consideration + 0.30*trust + 0.20*relevance + 0.15*awareness
-Return JSON ONLY. No prose. Keys in exact order.
-`;
+Return JSON ONLY. No prose. Keys in exact order.`;
 
-    // 3. CALL HUGGING FACE
     const hfResponse = await fetch(
       "https://api-inference.huggingface.co/models/meta-llama/Llama-3.1-8B-Instruct",
       {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${process.env.HF_TOKEN}`, // Securely load from Netlify Env
+          "Authorization": `Bearer ${process.env.HF_TOKEN}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
           inputs: `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${MASTER_PROMPT}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nbrand_url: "${brandUrl}"<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`,
-          parameters: { 
-            max_new_tokens: 800, 
-            temperature: 0.1, 
-            return_full_text: false 
-          },
-          options: {
-            wait_for_model: true,
-            use_cache: true
-          }
+          parameters: { max_new_tokens: 800, temperature: 0.1, return_full_text: false },
+          options: { wait_for_model: true, use_cache: true }
         })
       }
     );
@@ -193,11 +176,9 @@ Return JSON ONLY. No prose. Keys in exact order.
        return { statusCode: 500, headers, body: JSON.stringify(result) };
     }
 
-    // Extract text and strip accidental Markdown code blocks
     let aiText = result[0].generated_text.trim();
     const cleanJson = aiText.replace(/```json|```/g, "").trim();
 
-    // 4. FINAL RESPONSE WITH CORS HEADERS
     return {
       statusCode: 200,
       headers: headers,
